@@ -1,17 +1,22 @@
-# @meiyu/dsh-mobile-bridge
+# dsh-phone-access
 
-Reach this DeepSeek Harness desktop from the native mobile client over the public
-internet, with an address and a password.
+Reach this DeepSeek Harness desktop from the native mobile client — over the local
+network, a public tunnel, or both. A phone pairs by scanning a QR code and never
+types an address or a password.
 
 ## What it does
 
-Three parts, each owned here:
+Four parts, each owned here:
 
 - **Gateway** — projects sessions over the Remote wire (`@deepseek-ai/dsh-mobile-gateway`,
   inlined from the source tree so this package does not depend on that branch).
-- **Front** — listens on loopback, answers `POST /v1/auth` with a password, and
-  forwards every other route to the gateway.
-- **Tunnel** — a Cloudflare quick tunnel gives the front a public address.
+- **Front** — listens on loopback, answers `POST /v1/auth` with a password and
+  `POST /v1/pairing/redeem` with a one-time code, and forwards every other route to
+  the gateway.
+- **Tunnel** — a Cloudflare tunnel gives the front a public address: named (fixed
+  hostname) or quick (a fresh `trycloudflare.com` address per start).
+- **Section** — a Settings page showing the pairing QR, the credentials, the
+  connection choices, and the paired devices.
 
 The gateway keeps listening on loopback. `/api` in the current release admits only
 an authenticated peer, so the gateway's wire client carries the cookie the host
@@ -19,7 +24,27 @@ mints from its launch token (`connection.authenticatedUrl`).
 
 ## 界面与交互
 
-扫码配对、自定义密码、设备移除的布局与交互说明见 [docs/UI.md](docs/UI.md)。
+扫码配对、自定义密码、设备移除、连接方式的布局与交互说明见 [docs/UI.md](docs/UI.md)。
+
+## Choices
+
+Which paths a phone may use is a decision, not a build-time constant. The section
+writes it to `~/.dsh/mobile-bridge/settings.json`:
+
+| Key | Values | Effect |
+| --- | --- | --- |
+| `lan` | `true` / `false` | Bind the front to `0.0.0.0` so the same network can reach it |
+| `tunnel` | `named` / `quick` / `off` | Which public tunnel runs |
+| `tunnelName` | string | `cloudflared tunnel create` name, for `named` |
+| `hostname` | string | Public hostname routed to the named tunnel |
+
+**A saved choice wins over `cordis.patch.yml`.** The packaged config supplies the
+defaults a fresh install starts from; once the section saves, that file no longer
+decides these four keys. Editing `cordis.patch.yml` for `lan`/`tunnel` therefore
+appears to do nothing until `settings.json` is deleted.
+
+Applying a change rebinds the front (when `lan` changes) and restarts the tunnel
+(when the mode changes), without restarting the desktop application.
 
 ## Where the values land
 
@@ -27,27 +52,41 @@ mints from its launch token (`connection.authenticatedUrl`).
 
 | File | Holds |
 | --- | --- |
-| `password` | The 32-character access password |
+| `password` | The access password: 32 random characters, or one the operator typed |
 | `devices.json` | Paired devices: id, label, creation time, token hash |
-| `status.json` | Published public address, password, and front port |
+| `status.json` | Published public and LAN addresses, password, front port, last tunnel error |
+| `settings.json` | The choices above; absent until the section saves once |
+| `public-url.txt` | Only when `publicUrlFile` names it: an address published by an external tunnel |
 
-With a named tunnel the address is fixed (`https://<hostname>` routed to your own
-tunnel), so it survives restarts. A quick tunnel invents a new
-`trycloudflare.com` address every start and is kept only as a fallback.
+The address changes on every start of a quick tunnel, so read `status.json` (or the
+desktop log) rather than copying it into the app once. A named tunnel keeps its
+hostname across restarts.
 
-The address changes on every start, so read `status.json` (or the desktop log)
-rather than copying it into the app once.
+## Pairing
 
-## Sign in
+Two ways, both ending in the same durable device credential:
 
-In the app, enter the hostname and the password. The front answers with the same
-`{ deviceId, accessToken }` envelope a pairing code issues, so the stored
-connection is identical either way.
+1. **Scan** — the section mints a one-time secret and draws it as a QR code. The
+   app reads `{ version, gatewayUrl, pairingId, pairingSecret, expiresAt }` and
+   posts it to `/v1/pairing/redeem`. Codes expire in five minutes and work once.
+2. **Type** — enter the address and password; `POST /v1/auth` answers with the same
+   `{ deviceId, accessToken }` envelope.
 
-There is no pairing page and no QR code: the app's scan button expects a
-desktop-minted pairing payload, and minting one needs a settings surface the
-desktop client does not expose for this plugin. Address plus password covers the
-same need while the hostname is stable.
+## Security
+
+| Layer | What it does |
+| --- | --- |
+| Transport | Cloudflare terminates TLS; the tunnel reaches the front over loopback |
+| Entry | Only `POST /v1/auth` and `/v1/pairing/redeem` are reachable without a credential; everything else needs a device bearer token |
+| Password | Constant-time compare; a requested password must be 16–128 characters with no whitespace |
+| Pairing code | Five-minute TTL, single use, hashed at rest |
+| Rate limit | Five failures per client lock that client for a minute; forty across all clients pause the endpoint for a minute. The client key comes from `cf-connecting-ip` **only when the peer is loopback** — a LAN peer cannot spoof it |
+| Devices | Removing a device revokes its token before the record leaves the list |
+| Exposure | `lan: false` keeps the front on loopback, so the tunnel is the only entry point |
+
+The global failure counter can pause the endpoint for everyone, including the
+owner, for up to a minute. An already-paired phone is unaffected: its bearer token
+does not pass through `/v1/auth`.
 
 ## Verified against a live host
 
@@ -57,11 +96,15 @@ front listener:
 | Route | Result |
 | --- | --- |
 | `POST /v1/auth` | 200 with `{ deviceId, accessToken }`; 401 on a wrong password; 429 after five failures |
-| `POST /v1/sessions/list` | 200 with 304 real sessions |
+| `POST /v1/pairing/redeem` | 200 on a fresh code; the same code fails on a second use |
+| `POST /v1/sessions/list` | 200 with 326 real sessions |
 | `POST /v1/sessions/running` | 200 |
 | `POST /v1/sessions/:id/models` | 200 |
 | `POST /v1/settings/describe` | 200 |
 | `GET /v1/events` | 200 SSE stream: `gateway/ready` then heartbeats |
+
+The QR payload is additionally checked by decoding the drawn code with an
+independent decoder (OpenCV) and comparing it to the string that was encoded.
 
 Two routes are still limited:
 
@@ -74,9 +117,10 @@ Two routes are still limited:
 
 ## Limits worth knowing
 
-- The public address changes on every restart until a named tunnel with your own
-  domain replaces the quick one.
+- A quick tunnel changes its address on every reconnect; use a named tunnel for a
+  stable one.
+- `cloudflared` needs its edge connection to reach `*.argotunnel.com` and
+  `*.cloudflare.com` directly. A transparent proxy that captures those flows breaks
+  the tunnel; route them direct.
 - A free Apple ID's install expires after seven days; that is a signing limit, not
   a bridge limit.
-- Five wrong passwords from one address lock it for a minute; forty across all
-  addresses pause the endpoint for a minute.
