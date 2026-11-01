@@ -1,0 +1,10 @@
+# Build outputs: produced by `npm run build`, shipped in the npm tarball
+lib/
+client/client.js
+
+# Dependencies
+node_modules/
+
+# Editor and OS noise
+.DS_Store
+*.log

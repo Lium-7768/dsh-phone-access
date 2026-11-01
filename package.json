@@ -1,0 +1,63 @@
+{
+  "name": "dsh-phone-access",
+  "version": "0.1.4",
+  "description": "Reach this DeepSeek Harness desktop from the native mobile client over the public internet, with an address and a password.",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lium-7768/dsh-phone-access.git"
+  },
+  "homepage": "https://github.com/Lium-7768/dsh-phone-access#readme",
+  "bugs": {
+    "url": "https://github.com/Lium-7768/dsh-phone-access/issues"
+  },
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./client": "./client/client.js"
+  },
+  "files": [
+    "lib",
+    "client",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-commands",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-api-remotes"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.0"
+  },
+  "dependencies": {
+    "qrcode-generator": "^2.0.4",
+    "ws": "^8.18.0"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:ws --outfile=lib/index.js && node scripts/build-client.mjs",
+    "check": "node --check lib/index.js",
+    "verify": "npm run build && npm run check",
+    "build:client": "node scripts/build-client.mjs"
+  },
+  "author": "Yu Mei <yumei@aaxis.io>",
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

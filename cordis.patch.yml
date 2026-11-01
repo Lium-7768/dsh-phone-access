@@ -1,0 +1,33 @@
+# Reach this desktop from the native mobile client over the public internet.
+#
+# The gateway stays on loopback and a front listener answers the password
+# sign-in; a Cloudflare tunnel gives that front a public address.
+#
+# These are neutral defaults. A deployment that wants a stable address sets
+# `tunnel: named` with its own `tunnelName` and `hostname` in the profile's own
+# cordis.patch.yml, which applies after this bundle layer:
+#
+#   - id: dsh-phone-access
+#     config:
+#       port: 57748
+#       tunnel: named
+#       tunnelName: <tunnel created with `cloudflared tunnel create`>
+#       hostname: <hostname routed with `cloudflared tunnel route dns`>
+#
+# `port: 0` picks a free port each start, which suits a quick tunnel; a named
+# tunnel forwards to one fixed port, so it needs an explicit value.
+- insert:
+    - id: dsh-phone-access
+      name: dsh-phone-access
+      config:
+        enabled: true
+        port: 0
+        # quick | named. A quick tunnel prints a fresh trycloudflare.com address
+        # on every start; a named tunnel keeps one.
+        tunnel: quick
+        # Set with `tunnel: named`.
+        tunnelName: ''
+        hostname: ''
+        # Holds the password, the paired-device list, and the published status.
+        # Empty uses ~/.dsh/mobile-bridge.
+        dataDir: ''
