@@ -53,7 +53,8 @@
     "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:ws --outfile=lib/index.js && node scripts/build-client.mjs",
     "check": "node --check lib/index.js",
     "verify": "npm run build && npm run check",
-    "build:client": "node scripts/build-client.mjs"
+    "build:client": "node scripts/build-client.mjs",
+    "test:goals": "node scripts/test-goal-gateway.mjs"
   },
   "author": "Yu Mei <yumei@aaxis.io>",
   "license": "MIT",

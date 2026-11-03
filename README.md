@@ -124,3 +124,12 @@ Two routes are still limited:
   the tunnel; route them direct.
 - A free Apple ID's install expires after seven days; that is a signing limit, not
   a bridge limit.
+
+
+### Mobile goal controls
+
+Paired clients can read the live goal (including process-local activation) with `POST /v1/sessions/:id/goal/read` and create one with `POST /v1/sessions/:id/goal/create` using `{ "objective": "..." }`. Existing edit/pause/resume/clear routes retain the desktop compare-and-set reference. Goal creation and reads forward to `goals/create` and `goals/get`; no second goal store is introduced.
+
+Run `npm run test:goals` to verify the HTTP boundary with a synthetic desktop wire. Rebuild and update the installed phone-access plugin before using these routes from a newer mobile client.
+
+The task catalog is available through `POST /v1/schedules/catalog`. Versioned pause/resume/delete use `/v1/schedules/:id/:action` with `expectedUpdatedAt`; these forward only the corresponding `schedule/edit` operations. Archived sessions can be restored through `POST /v1/sessions/:id/unarchive`. All routes require paired-device authorization. The synthetic HTTP boundary check covers these routes as well as goals.

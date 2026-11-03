@@ -637,6 +637,35 @@ export class MobileGateway {
       writeJson(response, 200, await this.#response(await this.#dsh.call('subagents/list', { parentSessionId })))
       return
     }
+    if (url.pathname === '/v1/schedules/catalog') {
+      writeJson(response, 200, await this.#response({ items: await this.#dsh.call('schedule/catalog', {}) }))
+      return
+    }
+    const schedule = url.pathname.match(/^\/v1\/schedules\/([^/]+)\/(pause|resume|delete)$/)
+    if (schedule !== null) {
+      const id = decodePathSegment(schedule)
+      const expectedUpdatedAt = body.expectedUpdatedAt
+      if (expectedUpdatedAt !== null && typeof expectedUpdatedAt !== 'string') throw new GatewayHttpError('bad-request', '缺少任务版本，请刷新后重试。')
+      const request = schedule[2] === 'delete'
+        ? { id, action: 'delete', expectedUpdatedAt }
+        : { id, action: 'update', patch: { active: schedule[2] === 'resume' }, expectedUpdatedAt }
+      writeJson(response, 200, await this.#response(await this.#dsh.call('schedule/edit', { request })))
+      return
+    }
+    const readGoal = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/goal\/read$/)
+    if (readGoal !== null) {
+      const current = await this.#dsh.call('goals/get', { agentId: decodePathSegment(readGoal) })
+      writeJson(response, 200, await this.#response({ goal: current ?? null }))
+      return
+    }
+    const createGoal = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/goal\/create$/)
+    if (createGoal !== null) {
+      const objective = requireText(body.objective, '目标内容不能为空。')
+      writeJson(response, 200, await this.#response(await this.#dsh.call('goals/create', {
+        agentId: decodePathSegment(createGoal), request: { objective },
+      })))
+      return
+    }
     const goal = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/goal\/(edit|pause|resume|clear)$/)
     if (goal !== null) {
       const sessionId = decodePathSegment(goal)
@@ -726,6 +755,13 @@ export class MobileGateway {
           }),
         ),
       )
+      return
+    }
+    const unarchive = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/unarchive$/)
+    if (unarchive !== null) {
+      writeJson(response, 200, await this.#response(await this.#dsh.call('workspace/unarchiveSession', {
+        request: { sessionId: decodePathSegment(unarchive) },
+      })))
       return
     }
     const archive = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/archive$/)
