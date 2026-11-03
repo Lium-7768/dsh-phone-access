@@ -125,8 +125,7 @@ Two routes are still limited:
 - A free Apple ID's install expires after seven days; that is a signing limit, not
   a bridge limit.
 
-
-### Mobile goal controls
+### Goal, task and archive controls
 
 Paired clients can read the live goal (including process-local activation) with `POST /v1/sessions/:id/goal/read` and create one with `POST /v1/sessions/:id/goal/create` using `{ "objective": "..." }`. Existing edit/pause/resume/clear routes retain the desktop compare-and-set reference. Goal creation and reads forward to `goals/create` and `goals/get`; no second goal store is introduced.
 

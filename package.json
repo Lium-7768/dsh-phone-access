@@ -1,6 +1,6 @@
 {
   "name": "dsh-phone-access",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Reach this DeepSeek Harness desktop from the native mobile client over the public internet, with an address and a password.",
   "private": false,
   "repository": {
@@ -54,7 +54,8 @@
     "check": "node --check lib/index.js",
     "verify": "npm run build && npm run check",
     "build:client": "node scripts/build-client.mjs",
-    "test:goals": "node scripts/test-goal-gateway.mjs"
+    "test:goals": "node scripts/test-goal-gateway.mjs",
+    "prepack": "npm run verify"
   },
   "author": "Yu Mei <yumei@aaxis.io>",
   "license": "MIT",
