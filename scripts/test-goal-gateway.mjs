@@ -30,6 +30,8 @@ const gateway = new MobileGateway({ wireClient: {
     if (endpoint === 'goals/create') return { ref: { id: 'created', revision: 1 } }
     if (endpoint === 'goals/resume') return { ...live, revision: 4, activation: 'armed' }
     if (endpoint === 'goals/clear') return { id: 'goal-1', revision: 5 }
+    if (endpoint === 'account/getProfile') return { contact: 'l***@example.com', name: 'Phone Owner' }
+    if (endpoint === 'account/getBalance') return { bonusWallets: [], currency: 'CNY' }
     if (endpoint === 'commands/list')
       return [
         { description: 'Show or leave plan mode', name: 'plan' },
@@ -79,6 +81,23 @@ try {
   })
   assert.deepEqual(calls.at(-1), { endpoint: 'commands/list', args: { agentId: 'session/a' } })
   assert.equal((await post('/v1/sessions/session%2Fa/commands', {}, false)).status, 401)
+  const client = { locale: 'zh-CN', timezoneOffsetSeconds: -28800, version: '0.1.0' }
+  assert.deepEqual((await (await post('/v1/account/profile', { client })).json()).data, {
+    contact: 'l***@example.com',
+    name: 'Phone Owner',
+  })
+  assert.deepEqual(calls.at(-1), { endpoint: 'account/getProfile', args: { client } })
+  assert.deepEqual((await (await post('/v1/account/balance', { client })).json()).data, {
+    bonusWallets: [],
+    currency: 'CNY',
+  })
+  assert.deepEqual(calls.at(-1), { endpoint: 'account/getBalance', args: { client } })
+  // The client metadata is a required, validated argument.
+  assert.equal((await post('/v1/account/profile', {})).status, 400)
+  assert.equal((await post('/v1/account/profile', { client: { version: '0.1.0' } })).status, 400)
+  // Account writes never cross this gateway, so unknown account routes stay 404.
+  assert.equal((await post('/v1/account/signOut', { client })).status, 404)
+  assert.equal((await post('/v1/account/startSignIn', { client })).status, 404)
   assert.equal((await post('/v1/sessions/session%2Fa/unarchive', {})).status, 200)
   assert.deepEqual(calls.at(-1), { endpoint: 'workspace/unarchiveSession', args: { request: { sessionId: 'session/a' } } })
   console.log('Goal Gateway routes: authentication, validation, live activation, create and CAS forwarding passed.')

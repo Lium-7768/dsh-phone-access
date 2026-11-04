@@ -637,6 +637,15 @@ export class MobileGateway {
       writeJson(response, 200, await this.#response(await this.#dsh.call('subagents/list', { parentSessionId })))
       return
     }
+    // Account reads stay read-only on purpose: the gateway has one bearer token
+    // with no scope, so sign-in, sign-out and bonus acknowledgement never cross
+    // it. Both reads forward the client metadata the Host requires.
+    if (url.pathname === '/v1/account/profile' || url.pathname === '/v1/account/balance') {
+      const client = requireAccountClient(body.client)
+      const endpoint = url.pathname.endsWith('/profile') ? 'account/getProfile' : 'account/getBalance'
+      writeJson(response, 200, await this.#response(await this.#dsh.call(endpoint, { client })))
+      return
+    }
     // The `/` trigger menu needs the command descriptors the Host publishes for
     // one Session; without this the native client cannot discover commands.
     const commands = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/commands$/)
@@ -1674,6 +1683,17 @@ function writeError(response: ServerResponse, error: MobileGatewayError): void {
             ? 400
             : 502
   writeJson(response, status, { error })
+}
+
+/** Client metadata the account reads require; every field is validated on arrival. */
+function requireAccountClient(value: unknown): { version: string; locale: string; timezoneOffsetSeconds: number } {
+  const record = requireObject(value, '缺少客户端信息。')
+  const version = requireText(record.version, '客户端版本无效。')
+  const locale = requireText(record.locale, '客户端语言无效。')
+  const timezoneOffsetSeconds = record.timezoneOffsetSeconds
+  if (typeof timezoneOffsetSeconds !== 'number' || !Number.isFinite(timezoneOffsetSeconds))
+    throw new GatewayHttpError('bad-request', '客户端时区无效。')
+  return { locale, timezoneOffsetSeconds, version }
 }
 
 function requireText(value: unknown, message: string): string {
