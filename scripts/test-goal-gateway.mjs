@@ -30,6 +30,11 @@ const gateway = new MobileGateway({ wireClient: {
     if (endpoint === 'goals/create') return { ref: { id: 'created', revision: 1 } }
     if (endpoint === 'goals/resume') return { ...live, revision: 4, activation: 'armed' }
     if (endpoint === 'goals/clear') return { id: 'goal-1', revision: 5 }
+    if (endpoint === 'commands/list')
+      return [
+        { description: 'Show or leave plan mode', name: 'plan' },
+        { description: 'Switch the access preset', input: { hint: 'preset', kind: 'text' }, name: 'permission' },
+      ]
     throw new Error(`Unexpected endpoint: ${endpoint}`)
   },
   open(_endpoint, _args, signal) { return stream(signal) },
@@ -56,12 +61,24 @@ try {
   assert.deepEqual(calls.map(call => call.endpoint), ['goals/get', 'goals/get', 'goals/create', 'goals/resume', 'goals/clear'])
   assert.deepEqual(calls[2].args, { agentId: 'session/a', request: { objective: 'Finish the review' } })
   assert.deepEqual(calls[3].args, { agentId: 'session/a', ref: { id: 'goal-1', revision: 3 } })
-  const post = (path, body) => fetch(`${url}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${credential.deviceId}.${credential.accessToken}` }, body: JSON.stringify(body) })
+  const post = (path, body, authenticated = true) => fetch(`${url}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(authenticated ? { authorization: `Bearer ${credential.deviceId}.${credential.accessToken}` } : {}) },
+    body: JSON.stringify(body),
+  })
   assert.deepEqual((await (await post('/v1/schedules/catalog', {})).json()).data, { items: [{ id: 'task', status: 'active' }] })
   assert.equal((await post('/v1/schedules/task/pause', {})).status, 400)
   assert.equal((await post('/v1/schedules/task/run', {})).status, 404)
   assert.equal((await post('/v1/schedules/task/pause', { expectedUpdatedAt: null })).status, 200)
   assert.deepEqual(calls.at(-1), { endpoint: 'schedule/edit', args: { request: { id: 'task', action: 'update', patch: { active: false }, expectedUpdatedAt: null } } })
+  assert.deepEqual((await (await post('/v1/sessions/session%2Fa/commands', {})).json()).data, {
+    items: [
+      { description: 'Show or leave plan mode', name: 'plan' },
+      { description: 'Switch the access preset', input: { hint: 'preset', kind: 'text' }, name: 'permission' },
+    ],
+  })
+  assert.deepEqual(calls.at(-1), { endpoint: 'commands/list', args: { agentId: 'session/a' } })
+  assert.equal((await post('/v1/sessions/session%2Fa/commands', {}, false)).status, 401)
   assert.equal((await post('/v1/sessions/session%2Fa/unarchive', {})).status, 200)
   assert.deepEqual(calls.at(-1), { endpoint: 'workspace/unarchiveSession', args: { request: { sessionId: 'session/a' } } })
   console.log('Goal Gateway routes: authentication, validation, live activation, create and CAS forwarding passed.')

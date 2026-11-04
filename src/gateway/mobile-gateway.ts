@@ -637,6 +637,15 @@ export class MobileGateway {
       writeJson(response, 200, await this.#response(await this.#dsh.call('subagents/list', { parentSessionId })))
       return
     }
+    // The `/` trigger menu needs the command descriptors the Host publishes for
+    // one Session; without this the native client cannot discover commands.
+    const commands = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/commands$/)
+    if (commands !== null) {
+      writeJson(response, 200, await this.#response({
+        items: await this.#dsh.call('commands/list', { agentId: decodePathSegment(commands) }),
+      }))
+      return
+    }
     if (url.pathname === '/v1/schedules/catalog') {
       writeJson(response, 200, await this.#response({ items: await this.#dsh.call('schedule/catalog', {}) }))
       return
