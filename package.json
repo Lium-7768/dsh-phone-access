@@ -1,6 +1,6 @@
 {
   "name": "dsh-phone-access",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Reach this DeepSeek Harness desktop from the native mobile client over the public internet, with an address and a password.",
   "private": false,
   "repository": {
@@ -52,14 +52,20 @@
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --external:ws --outfile=lib/index.js && node scripts/build-client.mjs",
     "check": "node --check lib/index.js",
-    "verify": "npm run build && npm run check",
+    "verify": "npm run typecheck && npm run build && npm run check",
     "build:client": "node scripts/build-client.mjs",
     "test:goals": "node scripts/test-goal-gateway.mjs",
-    "prepack": "npm run verify"
+    "prepack": "npm run verify",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"src/**/*.ts\" \"client/*.js\" \"scripts/*.mjs\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"client/*.js\" \"scripts/*.mjs\""
   },
   "author": "Yu Mei <yumei@aaxis.io>",
   "license": "MIT",
   "devDependencies": {
-    "esbuild": "^0.28.2"
+    "@types/node": "^26.6.6",
+    "esbuild": "^0.28.2",
+    "prettier": "^3.9.10",
+    "typescript": "^5.9.3"
   }
 }

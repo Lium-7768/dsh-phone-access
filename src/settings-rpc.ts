@@ -9,7 +9,7 @@
 import { BRIDGE_ENDPOINTS, BRIDGE_RPC_CHANNEL } from '../client/api.js'
 import type { MobileDeviceRegistry } from './gateway/device-registry.ts'
 import { passwordProblem, type PasswordStore } from './password.ts'
-import type { BridgeSettings, TunnelMode } from './settings.ts'
+import type { BridgeSettings } from './settings.ts'
 
 /** What the section wants to know. */
 export interface BridgeStatus {
@@ -36,7 +36,7 @@ export interface BridgeStatus {
 }
 
 /** One RPC result, matching the connection handler's expectation. */
-type Result = { ok: true; value: unknown } | { ok: false; error: { code: string; message: string } }
+export type Result = { ok: true; value: unknown } | { ok: false; error: { code: string; message: string } }
 
 /** Reads and mutates the live bridge state. */
 export interface SettingsRpcOptions {
@@ -50,6 +50,10 @@ export interface SettingsRpcOptions {
   createPairing: (label: string) => { pairingId: string; pairingSecret: string; expiresAt: string }
   /** Starts the tunnel again, replacing a dead one. */
   restartTunnel: () => Promise<void>
+  /** Reads the choices currently in effect. */
+  settings: () => BridgeSettings
+  /** Stores and applies new choices. */
+  applySettings: (next: BridgeSettings) => Promise<void>
   /** Reports a rotation or revocation. */
   log: (message: string) => void
 }
@@ -103,7 +107,10 @@ export async function handleSettingsRpc(
     const next: BridgeSettings = {
       lan: typeof body?.lan === 'boolean' ? body.lan : current.lan,
       tunnel: mode === 'named' || mode === 'quick' || mode === 'off' ? mode : current.tunnel,
-      tunnelName: typeof body?.tunnelName === 'string' && body.tunnelName.trim() !== '' ? body.tunnelName.trim() : current.tunnelName,
+      tunnelName:
+        typeof body?.tunnelName === 'string' && body.tunnelName.trim() !== ''
+          ? body.tunnelName.trim()
+          : current.tunnelName,
       hostname: typeof body?.hostname === 'string' ? body.hostname.trim() : current.hostname,
     }
     await options.applySettings(next)

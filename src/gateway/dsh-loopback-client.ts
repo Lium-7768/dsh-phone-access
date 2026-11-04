@@ -24,7 +24,6 @@ interface RpcResponse<T> {
  */
 const REMOTE_STREAM_MUX_PATH = '/api/remote.mux'
 
-
 const REMOTE_EVENT_ENDPOINT = '$events'
 const REMOTE_EVENT_RESULT_ENDPOINT = '$events/result'
 
@@ -134,7 +133,9 @@ export class DshLoopbackClient {
     const url = new URL(REMOTE_STREAM_MUX_PATH, this.#baseUrl)
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     const streamCookie = this.#cookieProvider === undefined ? this.#cookie : await this.#cookieProvider()
-    const socket = new WebSocket(url, { headers: { host: this.#baseUrl.host, ...(streamCookie === undefined ? {} : { cookie: streamCookie }) } })
+    const socket = new WebSocket(url, {
+      headers: { host: this.#baseUrl.host, ...(streamCookie === undefined ? {} : { cookie: streamCookie }) },
+    })
     const inbox: StreamItem[] = []
     let wake: (() => void) | undefined
     let settled = false
@@ -148,7 +149,7 @@ export class DshLoopbackClient {
       socket.once('error', reject)
     })
     const streamId = randomUUID()
-    const handleMessage = (data: WebSocket.RawData): void => {
+    const handleMessage = (data: WebSocket.Data): void => {
       const text = Array.isArray(data)
         ? Buffer.concat(data).toString()
         : data instanceof ArrayBuffer
@@ -190,7 +191,9 @@ export class DshLoopbackClient {
             )
           } else return
         }
-        await new Promise<void>((resolve) => { wake = resolve })
+        await new Promise<void>(resolve => {
+          wake = resolve
+        })
       }
     } finally {
       settled = true

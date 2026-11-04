@@ -60,9 +60,10 @@ export async function startFront(options: FrontOptions): Promise<FrontHandle> {
   const address = server.address() as AddressInfo
   return {
     port: address.port,
-    close: () => new Promise<void>((resolve, reject) => {
-      server.close(error => (error === undefined ? resolve() : reject(error)))
-    }),
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close(error => (error === undefined ? resolve() : reject(error)))
+      }),
   }
 }
 
@@ -88,9 +89,6 @@ async function handle(
   forward(options, request, response)
 }
 
-
-
-
 /**
  * Answer one password sign-in.
  *
@@ -107,7 +105,10 @@ async function handleAuth(
 ): Promise<void> {
   const client = clientKey(request)
   if (limit.blocked(client)) {
-    writeJson(response, 429, { contractVersion: 1, error: { code: 'rate-limited', message: '尝试过于频繁，请稍后再试。' } })
+    writeJson(response, 429, {
+      contractVersion: 1,
+      error: { code: 'rate-limited', message: '尝试过于频繁，请稍后再试。' },
+    })
     return
   }
   let body: unknown
@@ -117,9 +118,8 @@ async function handleAuth(
     writeJson(response, 400, { contractVersion: 1, error: { code: 'invalid-request', message: '请求格式无效。' } })
     return
   }
-  const candidate = typeof (body as { password?: unknown }).password === 'string'
-    ? (body as { password: string }).password
-    : ''
+  const candidate =
+    typeof (body as { password?: unknown }).password === 'string' ? (body as { password: string }).password : ''
   if (!options.password.matches(candidate)) {
     limit.fail(client)
     writeJson(response, 401, { contractVersion: 1, error: { code: 'credentials', message: '访问密码不正确。' } })
@@ -146,8 +146,14 @@ function forward(options: FrontOptions, request: IncomingMessage, response: Serv
     headers[name] = value
   }
   const upstream = httpRequest(
-    { hostname: target.hostname, port: target.port, path: `${target.pathname}${target.search}`, method: request.method, headers },
-    (upstreamResponse) => {
+    {
+      hostname: target.hostname,
+      port: target.port,
+      path: `${target.pathname}${target.search}`,
+      method: request.method,
+      headers,
+    },
+    upstreamResponse => {
       const outHeaders: Record<string, string | string[]> = {}
       for (const [name, value] of Object.entries(upstreamResponse.headers)) {
         if (value === undefined || HOP_BY_HOP.has(name.toLowerCase())) continue
@@ -158,7 +164,8 @@ function forward(options: FrontOptions, request: IncomingMessage, response: Serv
     },
   )
   upstream.on('error', () => {
-    if (!response.headersSent) writeJson(response, 502, { contractVersion: 1, error: { code: 'upstream', message: '桌面端运行时暂不可用。' } })
+    if (!response.headersSent)
+      writeJson(response, 502, { contractVersion: 1, error: { code: 'upstream', message: '桌面端运行时暂不可用。' } })
     else response.end()
   })
   request.pipe(upstream)

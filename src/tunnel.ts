@@ -100,9 +100,13 @@ export async function startTunnel(options: {
 }): Promise<TunnelHandle> {
   const binary = resolveCloudflared(options.log)
   if (binary === undefined) throw new Error('cloudflared is unavailable')
-  const child: ChildProcess = spawn(binary, ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${options.port}`], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
+  const child: ChildProcess = spawn(
+    binary,
+    ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${options.port}`],
+    {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  )
   const tail = new OutputTail()
   const publicUrl = await new Promise<string>((resolve, reject) => {
     const timer = setTimeout(

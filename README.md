@@ -31,12 +31,12 @@ mints from its launch token (`connection.authenticatedUrl`).
 Which paths a phone may use is a decision, not a build-time constant. The section
 writes it to `~/.dsh/mobile-bridge/settings.json`:
 
-| Key | Values | Effect |
-| --- | --- | --- |
-| `lan` | `true` / `false` | Bind the front to `0.0.0.0` so the same network can reach it |
-| `tunnel` | `named` / `quick` / `off` | Which public tunnel runs |
-| `tunnelName` | string | `cloudflared tunnel create` name, for `named` |
-| `hostname` | string | Public hostname routed to the named tunnel |
+| Key          | Values                    | Effect                                                       |
+| ------------ | ------------------------- | ------------------------------------------------------------ |
+| `lan`        | `true` / `false`          | Bind the front to `0.0.0.0` so the same network can reach it |
+| `tunnel`     | `named` / `quick` / `off` | Which public tunnel runs                                     |
+| `tunnelName` | string                    | `cloudflared tunnel create` name, for `named`                |
+| `hostname`   | string                    | Public hostname routed to the named tunnel                   |
 
 **A saved choice wins over `cordis.patch.yml`.** The packaged config supplies the
 defaults a fresh install starts from; once the section saves, that file no longer
@@ -50,12 +50,12 @@ Applying a change rebinds the front (when `lan` changes) and restarts the tunnel
 
 `~/.dsh/mobile-bridge/` (owner-only):
 
-| File | Holds |
-| --- | --- |
-| `password` | The access password: 32 random characters, or one the operator typed |
-| `devices.json` | Paired devices: id, label, creation time, token hash |
-| `status.json` | Published public and LAN addresses, password, front port, last tunnel error |
-| `settings.json` | The choices above; absent until the section saves once |
+| File             | Holds                                                                          |
+| ---------------- | ------------------------------------------------------------------------------ |
+| `password`       | The access password: 32 random characters, or one the operator typed           |
+| `devices.json`   | Paired devices: id, label, creation time, token hash                           |
+| `status.json`    | Published public and LAN addresses, password, front port, last tunnel error    |
+| `settings.json`  | The choices above; absent until the section saves once                         |
 | `public-url.txt` | Only when `publicUrlFile` names it: an address published by an external tunnel |
 
 The address changes on every start of a quick tunnel, so read `status.json` (or the
@@ -74,15 +74,15 @@ Two ways, both ending in the same durable device credential:
 
 ## Security
 
-| Layer | What it does |
-| --- | --- |
-| Transport | Cloudflare terminates TLS; the tunnel reaches the front over loopback |
-| Entry | Only `POST /v1/auth` and `/v1/pairing/redeem` are reachable without a credential; everything else needs a device bearer token |
-| Password | Constant-time compare; a requested password must be 16–128 characters with no whitespace |
-| Pairing code | Five-minute TTL, single use, hashed at rest |
-| Rate limit | Five failures per client lock that client for a minute; forty across all clients pause the endpoint for a minute. The client key comes from `cf-connecting-ip` **only when the peer is loopback** — a LAN peer cannot spoof it |
-| Devices | Removing a device revokes its token before the record leaves the list |
-| Exposure | `lan: false` keeps the front on loopback, so the tunnel is the only entry point |
+| Layer        | What it does                                                                                                                                                                                                                   |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Transport    | Cloudflare terminates TLS; the tunnel reaches the front over loopback                                                                                                                                                          |
+| Entry        | Only `POST /v1/auth` and `/v1/pairing/redeem` are reachable without a credential; everything else needs a device bearer token                                                                                                  |
+| Password     | Constant-time compare; a requested password must be 16–128 characters with no whitespace                                                                                                                                       |
+| Pairing code | Five-minute TTL, single use, hashed at rest                                                                                                                                                                                    |
+| Rate limit   | Five failures per client lock that client for a minute; forty across all clients pause the endpoint for a minute. The client key comes from `cf-connecting-ip` **only when the peer is loopback** — a LAN peer cannot spoof it |
+| Devices      | Removing a device revokes its token before the record leaves the list                                                                                                                                                          |
+| Exposure     | `lan: false` keeps the front on loopback, so the tunnel is the only entry point                                                                                                                                                |
 
 The global failure counter can pause the endpoint for everyone, including the
 owner, for up to a minute. An already-paired phone is unaffected: its bearer token
@@ -93,15 +93,15 @@ does not pass through `/v1/auth`.
 Run through a real `dsh web` instance on the same machine, through the plugin's
 front listener:
 
-| Route | Result |
-| --- | --- |
-| `POST /v1/auth` | 200 with `{ deviceId, accessToken }`; 401 on a wrong password; 429 after five failures |
-| `POST /v1/pairing/redeem` | 200 on a fresh code; the same code fails on a second use |
-| `POST /v1/sessions/list` | 200 with 326 real sessions |
-| `POST /v1/sessions/running` | 200 |
-| `POST /v1/sessions/:id/models` | 200 |
-| `POST /v1/settings/describe` | 200 |
-| `GET /v1/events` | 200 SSE stream: `gateway/ready` then heartbeats |
+| Route                          | Result                                                                                 |
+| ------------------------------ | -------------------------------------------------------------------------------------- |
+| `POST /v1/auth`                | 200 with `{ deviceId, accessToken }`; 401 on a wrong password; 429 after five failures |
+| `POST /v1/pairing/redeem`      | 200 on a fresh code; the same code fails on a second use                               |
+| `POST /v1/sessions/list`       | 200 with 326 real sessions                                                             |
+| `POST /v1/sessions/running`    | 200                                                                                    |
+| `POST /v1/sessions/:id/models` | 200                                                                                    |
+| `POST /v1/settings/describe`   | 200                                                                                    |
+| `GET /v1/events`               | 200 SSE stream: `gateway/ready` then heartbeats                                        |
 
 The QR payload is additionally checked by decoding the drawn code with an
 independent decoder (OpenCV) and comparing it to the string that was encoded.
@@ -112,7 +112,7 @@ Two routes are still limited:
   the `session/follow` opening frame. That frame's cursor field does not map in
   the current release, so the page call is rejected.
 - **Search** — the host answers `session search is disabled: this deployment
-  configures the session-query…`, so a profile without session-query refuses it.
+configures the session-query…`, so a profile without session-query refuses it.
   That is a deployment setting, not a bridge defect.
 
 ## Limits worth knowing
@@ -135,3 +135,28 @@ The task catalog is available through `POST /v1/schedules/catalog`. Versioned pa
 Slash-command discovery is available through `POST /v1/sessions/:id/commands`, which forwards `commands/list` and returns `{ items }` of the Host's `CommandDescriptor` records. The native `/` trigger menu needs it; without the route the phone can only send commands it already knows by name.
 
 Account reads are deliberately read-only: `POST /v1/account/profile` and `POST /v1/account/balance` forward `account/getProfile` and `account/getBalance` with the `{ version, locale, timezoneOffsetSeconds }` client metadata the Host requires. Sign-in, sign-out and bonus acknowledgement never cross the gateway, because its device credential carries no scope: a paired phone may read the balance but cannot change the account. Unknown `/v1/account/*` paths stay 404.
+
+## Background jobs, schedules and Workspaces
+
+- `POST /v1/sessions/:id/jobs/:jobId/kill` forwards `job/kill`, so a job shown in
+  the activity panel can also be stopped from it. Jobs themselves arrive through
+  the `session/control` baseline stream.
+- `POST /v1/schedules/create` forwards `schedule/create` with the Host's own
+  `ScheduleCreateRequest` (`title`, `prompt`, `timing` and optional `target`).
+  `POST /v1/schedules/:id/run`, `/view` and `/history` forward `schedule/run`,
+  `schedule/view` and `schedule/history`. The gateway checks only the fields a
+  client cannot omit; the Host validates the typed timing and target unions and
+  returns its structured input errors.
+- `POST /v1/sessions/:id/pin` and `/unpin` forward `workspace/pinSession` and
+  `workspace/unpinSession`. Pinning is registry-global: the `workspace/follow`
+  stream publishes the whole pinned set, which `/v1/sessions/list` now reports
+  as `pinnedSessionIds` alongside `workspaces` and `archivedSessionIds`.
+- `POST /v1/workspaces/create` forwards `workspace/create` with a `path`.
+
+## Development
+
+`npm run typecheck` checks every TypeScript source under `src/`; no type
+information is shipped, but the check catches drift against the Host's wire
+shapes. `npm run format:check` and `npm run test:goals` are the other two gates.
+`npm run verify` runs typecheck, the esbuild bundle and a Node syntax check in
+that order, and `prepack` invokes it so a stale bundle cannot be published.

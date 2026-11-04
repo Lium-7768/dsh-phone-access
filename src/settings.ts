@@ -44,10 +44,12 @@ export function readSettings(path: string, fallback: BridgeSettings): BridgeSett
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<Record<keyof BridgeSettings, unknown>>
     return {
       lan: typeof parsed.lan === 'boolean' ? parsed.lan : fallback.lan,
-      tunnel: parsed.tunnel === 'named' || parsed.tunnel === 'quick' || parsed.tunnel === 'off'
-        ? parsed.tunnel
-        : fallback.tunnel,
-      tunnelName: typeof parsed.tunnelName === 'string' && parsed.tunnelName !== '' ? parsed.tunnelName : fallback.tunnelName,
+      tunnel:
+        parsed.tunnel === 'named' || parsed.tunnel === 'quick' || parsed.tunnel === 'off'
+          ? parsed.tunnel
+          : fallback.tunnel,
+      tunnelName:
+        typeof parsed.tunnelName === 'string' && parsed.tunnelName !== '' ? parsed.tunnelName : fallback.tunnelName,
       hostname: typeof parsed.hostname === 'string' ? parsed.hostname : fallback.hostname,
     }
   } catch {

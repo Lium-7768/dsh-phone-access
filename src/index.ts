@@ -18,13 +18,15 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir, networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+// Declaration merge for `ctx.webServer` and `ctx.connection`.
+import './host-context.ts'
 import { MobileGateway } from './gateway/mobile-gateway.ts'
 
 import { startFront, type FrontHandle } from './front.ts'
 import { exchangeLaunchToken } from './launch-token.ts'
 import { PasswordStore } from './password.ts'
 import { PersistentDeviceRegistry } from './persistent-registry.ts'
-import { BRIDGE_RPC_CHANNEL, handleSettingsRpc } from './settings-rpc.ts'
+import { BRIDGE_RPC_CHANNEL, handleSettingsRpc, type Result } from './settings-rpc.ts'
 import { readSettings, writeSettings, type BridgeSettings, type TunnelMode } from './settings.ts'
 import { startNamedTunnel, startTunnel, type TunnelHandle } from './tunnel.ts'
 
@@ -45,9 +47,10 @@ export interface Config {
    *
    * `quick` prints a fresh `trycloudflare.com` address on every start, so a saved
    * address stops working after a restart. `named` uses a tunnel created once in
-   * the account, whose hostname never changes.
+   * the account, whose hostname never changes. `off` keeps the front on loopback
+   * with no public address, and `true` is the legacy switch for `quick`.
    */
-  tunnel?: boolean | 'quick' | 'named'
+  tunnel?: boolean | 'quick' | 'named' | 'off'
   /** Tunnel name created by `cloudflared tunnel create`, for `named` mode. */
   tunnelName?: string
   /** Public hostname routed to the named tunnel, for `named` mode. */
@@ -103,7 +106,7 @@ interface SettingsSectionState {
 interface ResolvedConfig {
   enabled: boolean
   port: number
-  tunnel: boolean | 'quick' | 'named'
+  tunnel: boolean | 'quick' | 'named' | 'off'
   tunnelName: string
   hostname: string
   dataDir: string
@@ -128,12 +131,18 @@ function resolveConfig(raw: Config): ResolvedConfig {
     hostname: raw.hostname ?? '',
     lan: raw.lan ?? false,
     publicUrlFile: raw.publicUrlFile ?? '',
-    tunnelMode: raw.tunnel === false || raw.tunnel === undefined ? (raw.tunnel === false ? 'off' : 'quick') : raw.tunnel,
+    // `tunnel: true` is the legacy on-switch and means a quick tunnel; only the
+    // three named modes reach the settings surface.
+    tunnelMode:
+      raw.tunnel === 'named' || raw.tunnel === 'quick' || raw.tunnel === 'off'
+        ? raw.tunnel
+        : raw.tunnel === false
+          ? 'off'
+          : 'quick',
     // An empty string in cordis.patch.yml means "use the default", not "write to
     // the current directory": mkdirSync('') throws.
-    dataDir: raw.dataDir !== undefined && raw.dataDir.trim() !== ''
-      ? raw.dataDir
-      : join(homedir(), '.dsh', 'mobile-bridge'),
+    dataDir:
+      raw.dataDir !== undefined && raw.dataDir.trim() !== '' ? raw.dataDir : join(homedir(), '.dsh', 'mobile-bridge'),
   }
 }
 
@@ -156,7 +165,7 @@ export function apply(ctx: Context, raw: Config = {}): void {
   // `/api` admits only an authenticated peer in the current release, so the
   // gateway's loopback client carries the cookie the host mints from its launch
   // token. `authenticatedUrl` is the supported way to obtain that token.
-  ctx.inject(['connection', 'webServer'], (hostCtx) => {
+  ctx.inject(['connection', 'webServer'], hostCtx => {
     const origin = hostCtx.webServer.getOrigin()
 
     // Boot first: the RPC surface below only serves what boot publishes, and an
@@ -170,27 +179,31 @@ export function apply(ctx: Context, raw: Config = {}): void {
     // routes through the connection service's context and so cannot reach
     // `webServer`. Registering the route directly applies the same admission the
     // `/api` route does.
-    hostCtx.effect(() => hostCtx.webServer.register({
-      kind: 'prefix',
-      path: BRIDGE_RPC_CHANNEL,
-      handler: async (req, res) => {
-        const rejection = hostCtx.connection.requestRejection(req)
-        if (rejection !== undefined) {
-          res.writeHead(rejection, { 'content-type': 'text/plain' })
-          res.end(rejection === 401 ? 'unauthorized' : 'forbidden')
-          return
-        }
-        const request = await readBridgeRequest(req)
-        if (request === undefined) {
-          writeBridgeResponse(res, 'invalid-request', {
-            ok: false,
-            error: { code: 'invalid-request', message: '请求格式无效。', details: {} },
-          })
-          return
-        }
-        writeBridgeResponse(res, request.rpcId, await bridgeRpc(request.method, request.payload))
-      },
-    }), 'mobile-bridge: settings route')
+    hostCtx.effect(
+      () =>
+        hostCtx.webServer.register({
+          kind: 'prefix',
+          path: BRIDGE_RPC_CHANNEL,
+          handler: async (req, res) => {
+            const rejection = hostCtx.connection.requestRejection(req)
+            if (rejection !== undefined) {
+              res.writeHead(rejection, { 'content-type': 'text/plain' })
+              res.end(rejection === 401 ? 'unauthorized' : 'forbidden')
+              return
+            }
+            const request = await readBridgeRequest(req)
+            if (request === undefined) {
+              writeBridgeResponse(res, 'invalid-request', {
+                ok: false,
+                error: { code: 'invalid-request', message: '请求格式无效。', details: {} },
+              })
+              return
+            }
+            writeBridgeResponse(res, request.rpcId, await bridgeRpc(request.method, request.payload))
+          },
+        }),
+      'mobile-bridge: settings route',
+    )
 
     /**
      * Answer one `bridge.*` endpoint on the shared channel.
@@ -199,39 +212,43 @@ export function apply(ctx: Context, raw: Config = {}): void {
      * @param payload - the endpoint's arguments.
      * @returns the section's result envelope.
      */
-    async function bridgeRpc(endpoint: string, payload: unknown): Promise<unknown> {
+    async function bridgeRpc(endpoint: string, payload: unknown): Promise<Result> {
       const state = settingsSectionState
       if (state === undefined) {
         return { ok: false, error: { code: 'starting', message: '手机访问尚未启动完成。' } }
       }
-      return handleSettingsRpc({
-        status: () => ({
-          publicUrl: state.publicUrl(),
-          lanUrl: state.lanUrl(),
-          hostname: state.hostname(),
-          password: state.password.value,
-          tunnelRunning: state.tunnelRunning(),
-          tunnelConnected: state.tunnelConnected(),
-          frontPort: state.frontPort,
-          tunnelError: state.tunnelError(),
-          settings: state.settings(),
-          devices: state.devices
-            .list()
-            .filter(device => device.revokedAt === undefined)
-            .map(device => ({
-              deviceId: device.deviceId,
-              label: device.label,
-              createdAt: device.createdAt,
-            })),
-        }),
-        password: state.password,
-        devices: state.devices,
-        createPairing: label => state.createPairing(label),
-        restartTunnel: state.restartTunnel,
-        settings: state.settings,
-        applySettings: state.applySettings,
-        log: message => log(message),
-      }, endpoint, payload)
+      return handleSettingsRpc(
+        {
+          status: () => ({
+            publicUrl: state.publicUrl(),
+            lanUrl: state.lanUrl(),
+            hostname: state.hostname(),
+            password: state.password.value,
+            tunnelRunning: state.tunnelRunning(),
+            tunnelConnected: state.tunnelConnected(),
+            frontPort: state.frontPort,
+            tunnelError: state.tunnelError(),
+            settings: state.settings(),
+            devices: state.devices
+              .list()
+              .filter(device => device.revokedAt === undefined)
+              .map(device => ({
+                deviceId: device.deviceId,
+                label: device.label,
+                createdAt: device.createdAt,
+              })),
+          }),
+          password: state.password,
+          devices: state.devices,
+          createPairing: label => state.createPairing(label),
+          restartTunnel: state.restartTunnel,
+          settings: state.settings,
+          applySettings: state.applySettings,
+          log: message => log(message),
+        },
+        endpoint,
+        payload,
+      )
     }
 
     /**
@@ -355,9 +372,16 @@ export function apply(ctx: Context, raw: Config = {}): void {
           // about 40 seconds here. The attempt runs in the background, so a slow
           // success costs nothing but a late address.
           const timeoutMs = 90_000
-          const next = settings.tunnel === 'named'
-            ? await startNamedTunnel({ name: settings.tunnelName, hostname: settings.hostname, port: front.port, log, timeoutMs })
-            : await startTunnel({ port: front.port, log, timeoutMs })
+          const next =
+            settings.tunnel === 'named'
+              ? await startNamedTunnel({
+                  name: settings.tunnelName,
+                  hostname: settings.hostname,
+                  port: front.port,
+                  log,
+                  timeoutMs,
+                })
+              : await startTunnel({ port: front.port, log, timeoutMs })
           tunnel?.stop()
           tunnel = next
           tunnelError = null
@@ -382,9 +406,10 @@ export function apply(ctx: Context, raw: Config = {}): void {
        */
       const applySettings = async (next: BridgeSettings): Promise<void> => {
         const lanChanged = next.lan !== settings.lan
-        const tunnelChanged = next.tunnel !== settings.tunnel
-          || next.tunnelName !== settings.tunnelName
-          || next.hostname !== settings.hostname
+        const tunnelChanged =
+          next.tunnel !== settings.tunnel ||
+          next.tunnelName !== settings.tunnelName ||
+          next.hostname !== settings.hostname
         settings = next
         writeSettings(settingsPath, settings)
         if (lanChanged) {
@@ -406,8 +431,8 @@ export function apply(ctx: Context, raw: Config = {}): void {
 
       settingsSectionState = {
         publicUrl: () => tunnel?.publicUrl ?? externalPublicUrl(),
-        lanUrl: () => lanAddress === null ? null : `http://${lanAddress}:${String(front.port)}`,
-        hostname: () => settings.hostname === '' ? null : settings.hostname,
+        lanUrl: () => (lanAddress === null ? null : `http://${lanAddress}:${String(front.port)}`),
+        hostname: () => (settings.hostname === '' ? null : settings.hostname),
         password,
         devices,
         tunnelRunning: () => tunnel !== undefined,
@@ -438,7 +463,6 @@ export function apply(ctx: Context, raw: Config = {}): void {
     }
   })
 }
-
 
 /**
  * First routable IPv4 address, for the phone's LAN origin.
@@ -490,7 +514,8 @@ async function readBridgeRequest(req: IncomingMessage): Promise<BridgeRequest | 
   }
   if (typeof parsed !== 'object' || parsed === null) return undefined
   const body = parsed as { type?: unknown; rpcId?: unknown; method?: unknown; payload?: unknown }
-  if (body.type !== 'client-request' || typeof body.rpcId !== 'string' || typeof body.method !== 'string') return undefined
+  if (body.type !== 'client-request' || typeof body.rpcId !== 'string' || typeof body.method !== 'string')
+    return undefined
   return { rpcId: body.rpcId, method: body.method, payload: body.payload }
 }
 
@@ -504,13 +529,9 @@ async function readBridgeRequest(req: IncomingMessage): Promise<BridgeRequest | 
 function writeBridgeResponse(
   res: ServerResponse,
   rpcId: string,
-  result:
-    | { ok: true; value: unknown }
-    | { ok: false; error: { code: string; message: string; details?: unknown } },
+  result: { ok: true; value: unknown } | { ok: false; error: { code: string; message: string; details?: unknown } },
 ): void {
-  const framed = result.ok
-    ? result
-    : { ...result, error: { ...result.error, details: result.error.details ?? {} } }
+  const framed = result.ok ? result : { ...result, error: { ...result.error, details: result.error.details ?? {} } }
   res.writeHead(200, { 'content-type': 'application/json' })
   res.end(JSON.stringify({ type: 'server-response', rpcId, result: framed }))
 }

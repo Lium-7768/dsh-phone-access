@@ -78,67 +78,118 @@ export function PhonePanel({ rpcCall, t }) {
     return h('div', { style: S.wrap }, h('p', { style: S.muted }, error ? t('failed') : t('loading')))
   }
 
-  const tunnelText = status.tunnelConnected === true
-    ? t('tunnelConnected')
-    : status.tunnelRunning === true ? t('tunnelConnecting') : t('tunnelUnavailable')
+  const tunnelText =
+    status.tunnelConnected === true
+      ? t('tunnelConnected')
+      : status.tunnelRunning === true
+        ? t('tunnelConnecting')
+        : t('tunnelUnavailable')
   const address = status.publicUrl ?? status.lanUrl
   const devices = status.devices ?? []
 
-  return h('div', { style: S.wrap },
-    h('section', { style: S.card },
-      h('div', { style: S.cardHead },
+  return h(
+    'div',
+    { style: S.wrap },
+    h(
+      'section',
+      { style: S.card },
+      h(
+        'div',
+        { style: S.cardHead },
         h('h3', { style: S.cardTitle }, t('scanCard')),
-        h('button', {
-          type: 'button', style: { ...S.primary, opacity: pairingBusy ? 0.6 : 1 }, disabled: pairingBusy,
-          onClick: () => void startPairing(),
-        }, pairing === null ? t('qrGenerate') : t('qrRefresh')),
+        h(
+          'button',
+          {
+            type: 'button',
+            style: { ...S.primary, opacity: pairingBusy ? 0.6 : 1 },
+            disabled: pairingBusy,
+            onClick: () => void startPairing(),
+          },
+          pairing === null ? t('qrGenerate') : t('qrRefresh'),
+        ),
       ),
       pairing === null
-        ? (pairingError === '' ? h('p', { style: S.hint }, t('qrIntro')) : h('p', { style: S.error }, pairingError))
+        ? pairingError === ''
+          ? h('p', { style: S.hint }, t('qrIntro'))
+          : h('p', { style: S.error }, pairingError)
         : (() => {
-          const expired = Date.parse(pairing.expiresAt) <= now
-          const remaining = Math.max(0, Math.ceil((Date.parse(pairing.expiresAt) - now) / 1000))
-          if (expired) return h('p', { style: S.error }, t('qrExpired'))
-          return h('div', { style: S.qrBody },
-            h('div', {
-              style: S.qrImage,
-              dangerouslySetInnerHTML: { __html: qrSvgMarkup(JSON.stringify(pairing), { cellSize: 3 }) },
-            }),
-            h('div', { style: S.qrMeta },
-              h('code', { style: S.countdown },
-                `${String(Math.floor(remaining / 60))}:${String(remaining % 60).padStart(2, '0')}`),
-              h('code', { style: S.code }, pairing.gatewayUrl),
-            ),
-          )
-        })(),
+            const expired = Date.parse(pairing.expiresAt) <= now
+            const remaining = Math.max(0, Math.ceil((Date.parse(pairing.expiresAt) - now) / 1000))
+            if (expired) return h('p', { style: S.error }, t('qrExpired'))
+            return h(
+              'div',
+              { style: S.qrBody },
+              h('div', {
+                style: S.qrImage,
+                dangerouslySetInnerHTML: { __html: qrSvgMarkup(JSON.stringify(pairing), { cellSize: 3 }) },
+              }),
+              h(
+                'div',
+                { style: S.qrMeta },
+                h(
+                  'code',
+                  { style: S.countdown },
+                  `${String(Math.floor(remaining / 60))}:${String(remaining % 60).padStart(2, '0')}`,
+                ),
+                h('code', { style: S.code }, pairing.gatewayUrl),
+              ),
+            )
+          })(),
     ),
 
-    h('section', { style: S.card },
+    h(
+      'section',
+      { style: S.card },
       h('h3', { style: S.cardTitle }, t('linkCard')),
-      h('div', { style: S.field },
+      h(
+        'div',
+        { style: S.field },
         h('span', { style: S.label }, t('addressLabel')),
         h('code', { style: S.code }, address ?? t('addressMissing')),
-        address === null ? null : h('button', {
-          type: 'button', style: S.ghost, onClick: () => void copy(address, 'url'),
-        }, copied === 'url' ? t('copied') : t('copy')),
+        address === null
+          ? null
+          : h(
+              'button',
+              {
+                type: 'button',
+                style: S.ghost,
+                onClick: () => void copy(address, 'url'),
+              },
+              copied === 'url' ? t('copied') : t('copy'),
+            ),
       ),
-      h('div', { style: S.field },
+      h(
+        'div',
+        { style: S.field },
         h('span', { style: S.label }, t('passwordLabel')),
         h('code', { style: S.code }, t('passwordHidden')),
-        h('button', { type: 'button', style: S.ghost, onClick: () => void copy(status.password, 'pw') },
-          copied === 'pw' ? t('copied') : t('copy')),
+        h(
+          'button',
+          { type: 'button', style: S.ghost, onClick: () => void copy(status.password, 'pw') },
+          copied === 'pw' ? t('copied') : t('copy'),
+        ),
       ),
       h('p', { style: S.hint }, t('passwordHelp')),
     ),
 
-    h('section', { style: S.card },
+    h(
+      'section',
+      { style: S.card },
       h('h3', { style: S.cardTitle }, `${t('devicesCard')} · ${String(devices.length)}`),
       devices.length === 0
         ? h('p', { style: S.muted }, t('devicesEmpty'))
-        : h('ul', { style: S.list }, ...devices.map(device => h('li', { key: device.deviceId, style: S.listItem },
-          h('span', { style: S.deviceLabel }, device.label),
-          h('span', { style: S.deviceMeta }, new Date(device.createdAt).toLocaleDateString()),
-        ))),
+        : h(
+            'ul',
+            { style: S.list },
+            ...devices.map(device =>
+              h(
+                'li',
+                { key: device.deviceId, style: S.listItem },
+                h('span', { style: S.deviceLabel }, device.label),
+                h('span', { style: S.deviceMeta }, new Date(device.createdAt).toLocaleDateString()),
+              ),
+            ),
+          ),
       h('p', { style: S.hint }, `${t('tunnelLabel')}：${status.hostname ?? status.publicUrl ?? '—'} · ${tunnelText}`),
     ),
   )
@@ -148,26 +199,43 @@ export function PhonePanel({ rpcCall, t }) {
 const S = {
   wrap: { display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', maxWidth: '100%' },
   card: {
-    display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px',
-    borderRadius: '12px', border: '0.5px solid var(--dsw-alias-border-l3)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    padding: '12px',
+    borderRadius: '12px',
+    border: '0.5px solid var(--dsw-alias-border-l3)',
     background: 'var(--dsw-alias-bg-layer-1)',
   },
   cardHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' },
   cardTitle: { fontSize: '13px', fontWeight: 600, margin: 0 },
   primary: {
-    flex: 'none', padding: '4px 10px', fontSize: '12px', fontWeight: 500, borderRadius: '8px',
-    cursor: 'pointer', border: '0.5px solid var(--dsw-alias-brand-primary)',
-    background: 'var(--dsw-alias-brand-primary)', color: 'var(--dsw-alias-label-primary-inverted)',
+    flex: 'none',
+    padding: '4px 10px',
+    fontSize: '12px',
+    fontWeight: 500,
+    borderRadius: '8px',
+    cursor: 'pointer',
+    border: '0.5px solid var(--dsw-alias-brand-primary)',
+    background: 'var(--dsw-alias-brand-primary)',
+    color: 'var(--dsw-alias-label-primary-inverted)',
   },
   ghost: {
-    alignSelf: 'flex-start', padding: '3px 9px', fontSize: '12px', borderRadius: '8px', cursor: 'pointer',
-    border: '0.5px solid var(--dsw-alias-border-l3)', background: 'var(--dsw-alias-button-elevated-fill)',
+    alignSelf: 'flex-start',
+    padding: '3px 9px',
+    fontSize: '12px',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    border: '0.5px solid var(--dsw-alias-border-l3)',
+    background: 'var(--dsw-alias-button-elevated-fill)',
     color: 'var(--dsw-alias-label-primary)',
   },
   field: { display: 'flex', flexDirection: 'column', gap: '3px' },
   label: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary)' },
   code: {
-    fontSize: '12px', wordBreak: 'break-all', color: 'var(--dsw-alias-label-primary)',
+    fontSize: '12px',
+    wordBreak: 'break-all',
+    color: 'var(--dsw-alias-label-primary)',
     fontFamily: 'var(--ds-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
   },
   countdown: { fontSize: '18px', fontWeight: 600, fontVariantNumeric: 'tabular-nums' },
@@ -176,7 +244,14 @@ const S = {
   qrMeta: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0 },
   list: { listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '4px' },
   listItem: { display: 'flex', alignItems: 'center', gap: '8px' },
-  deviceLabel: { fontSize: '13px', flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  deviceLabel: {
+    fontSize: '13px',
+    flex: '1 1 auto',
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
   deviceMeta: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary)', flex: 'none' },
   hint: { margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: '12px', lineHeight: '18px' },
   muted: { margin: 0, color: 'var(--dsw-alias-label-tertiary)', fontSize: '13px' },
