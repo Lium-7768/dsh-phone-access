@@ -44,9 +44,19 @@ const workspaceStream = async function* (signal) {
   yield { type: 'pinned', pinnedSessionIds: ['session/a'] }
   await new Promise(resolve => (signal.aborted ? resolve() : signal.addEventListener('abort', resolve, { once: true })))
 }
+// Later job-list frames are pushed by the test so the broadcast path can be
+// observed on a live SSE client, not just through the cached snapshot.
+const pendingJobRosters = []
 const jobListStream = async function* (signal) {
   yield { type: 'rows', jobs: [{ id: 'job/1', status: 'running', title: 'Build' }] }
-  await new Promise(resolve => (signal.aborted ? resolve() : signal.addEventListener('abort', resolve, { once: true })))
+  while (!signal.aborted) {
+    const next = pendingJobRosters.shift()
+    if (next === undefined) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      continue
+    }
+    yield { type: 'rows', jobs: next }
+  }
 }
 const stateStream = async function* (signal) {
   yield {
@@ -309,6 +319,54 @@ try {
     args: { childSessionId: 'child/1' },
   })
   assert.equal((await post('/v1/sessions/session%2Fa/subagents/child%2F1/interrupt', { mode: 'one-shot' })).status, 400)
+  // A subscribed device must receive queue and job snapshots on its SSE stream.
+  // `gateway/ready` arrives on connect; the rosters arrive as pushes.
+  const { request: httpRequest } = await import('node:http')
+  const sse = await new Promise((resolve, reject) => {
+    const req = httpRequest(
+      `${url}/v1/events`,
+      { headers: { authorization: `Bearer ${credential.deviceId}.${credential.accessToken}` } },
+      response => {
+        let text = ''
+        const waiters = []
+        response.setEncoding('utf8')
+        response.on('data', chunk => {
+          text += chunk
+          for (const waiter of [...waiters]) {
+            if (waiter.check(text)) {
+              waiters.splice(waiters.indexOf(waiter), 1)
+              waiter.resolve()
+            }
+          }
+        })
+        resolve({
+          waitFor(fragment, timeoutMs = 4000) {
+            return new Promise((resolveWait, rejectWait) => {
+              const waiter = { check: value => value.includes(fragment), resolve: resolveWait }
+              if (waiter.check(text)) return resolveWait()
+              waiters.push(waiter)
+              setTimeout(() => rejectWait(new Error(`no SSE frame containing ${fragment}`)), timeoutMs).unref()
+            })
+          },
+          close: () => req.destroy(),
+        })
+        response.on('error', reject)
+      },
+    )
+    req.on('error', reject)
+    req.end()
+  })
+  await sse.waitFor('gateway/ready')
+  const subscribed = await (await post('/v1/sessions/session%2Fa/subscriptions', { lastSeenSeq: 0 })).json()
+  const subscription = subscribed.data
+  await post(`/v1/subscriptions/${subscription.subscriptionId}/activate`, {
+    activationToken: subscription.activationToken,
+    appliedSnapshotSeq: 0,
+  })
+  pendingJobRosters.push([{ id: 'job/1', status: 'completed', title: 'Build' }])
+  await sse.waitFor('"type":"session/jobs"')
+  await sse.waitFor('"type":"session/queue"')
+  sse.close()
   console.log('Goal Gateway routes: authentication, validation, live activation, create and CAS forwarding passed.')
 } finally {
   await gateway.stop()
