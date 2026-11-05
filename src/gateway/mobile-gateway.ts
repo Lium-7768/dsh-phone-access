@@ -1798,7 +1798,11 @@ export class MobileGateway {
       if (follow !== undefined && follow.controller === controller) {
         this.#follows.delete(sessionId)
         const stillSubscribed = [...this.#subscriptions.values()].some(item => item.sessionId === sessionId)
-        if (stillSubscribed && !controller.signal.aborted && this.#status !== undefined) {
+        // The queue and job streams share this controller, so abort it before a
+        // retry: otherwise each retry stacks a second state/job pair on the ones
+        // still attached to the ended follow stream.
+        controller.abort()
+        if (stillSubscribed && this.#status !== undefined) {
           const retry = setTimeout(() => {
             this.#ensureFollow(sessionId)
           }, 1_000)
