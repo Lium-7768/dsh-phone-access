@@ -44,6 +44,20 @@ const workspaceStream = async function* (signal) {
   yield { type: 'pinned', pinnedSessionIds: ['session/a'] }
   await new Promise(resolve => (signal.aborted ? resolve() : signal.addEventListener('abort', resolve, { once: true })))
 }
+const jobListStream = async function* (signal) {
+  yield { type: 'rows', jobs: [{ id: 'job/1', status: 'running', title: 'Build' }] }
+  await new Promise(resolve => (signal.aborted ? resolve() : signal.addEventListener('abort', resolve, { once: true })))
+}
+const stateStream = async function* (signal) {
+  yield {
+    cursor: 4,
+    active: true,
+    running: true,
+    queue: [{ id: 'q1', placement: 'queued', content: 'Next' }],
+    pendingInput: [],
+  }
+  await new Promise(resolve => (signal.aborted ? resolve() : signal.addEventListener('abort', resolve, { once: true })))
+}
 const gateway = new MobileGateway({
   wireClient: {
     async call(endpoint, args) {
@@ -61,6 +75,26 @@ const gateway = new MobileGateway({
         return { created: true, workspace: { workspaceId: 'w1', path: args.request.path } }
       if (endpoint === 'workspace/unarchiveSession') return { archivedSessionIds: [] }
       if (endpoint === 'session/list') return { items: [{ sessionId: 'session/a', running: false }] }
+      if (endpoint === 'session/state')
+        return {
+          cursor: 4,
+          active: true,
+          running: true,
+          queue: [{ id: 'q1', placement: 'queued', content: 'Next' }],
+          pendingInput: [],
+        }
+      if (endpoint === 'session/projections')
+        return {
+          kind: 'value',
+          seq: 9,
+          values: {
+            subagentCatalog: [
+              { id: 'child/1', mode: 'continuable', label: 'Reviewer' },
+              { id: 'child/2', mode: 'external' },
+            ],
+          },
+        }
+      if (endpoint === 'subagents/interruptByUser') return { interrupted: true }
       if (endpoint === 'goals/get') return live
       if (endpoint === 'goals/create') return { ref: { id: 'created', revision: 1 } }
       if (endpoint === 'goals/resume') return { ...live, revision: 4, activation: 'armed' }
@@ -75,7 +109,10 @@ const gateway = new MobileGateway({
       throw new Error(`Unexpected endpoint: ${endpoint}`)
     },
     open(endpoint, _args, signal) {
-      return endpoint === 'workspace/follow' ? workspaceStream(signal) : stream(signal)
+      if (endpoint === 'workspace/follow') return workspaceStream(signal)
+      if (endpoint === 'job/list') return jobListStream(signal)
+      if (endpoint === 'session/observeState') return stateStream(signal)
+      return stream(signal)
     },
     openEvents(signal) {
       return stream(signal)
@@ -235,6 +272,43 @@ try {
     endpoint: 'workspace/unarchiveSession',
     args: { request: { sessionId: 'session/a' } },
   })
+  // Queue and job snapshots fall back to a fresh Host read when no follow
+  // stream has cached one, so polling REST clients still see live data.
+  assert.deepEqual((await (await post('/v1/sessions/session%2Fa/queue', {})).json()).data, {
+    items: [{ id: 'q1', placement: 'queued', content: 'Next' }],
+  })
+  assert.deepEqual(calls.at(-1), { endpoint: 'session/state', args: { request: { sessionId: 'session/a' } } })
+  assert.deepEqual((await (await post('/v1/sessions/session%2Fa/jobs', {})).json()).data, {
+    items: [{ id: 'job/1', status: 'running', title: 'Build' }],
+  })
+  // The subagent roster is derived from the parent's catalog projection; a
+  // mode the phone cannot render degrades to a diagnostic row.
+  assert.deepEqual((await (await post('/v1/sessions/session%2Fa/subagents', {})).json()).data, {
+    entries: [
+      {
+        kind: 'child',
+        id: 'child/1',
+        mode: 'continuable',
+        activity: 'inactive',
+        hasChildren: false,
+        label: 'Reviewer',
+      },
+      { kind: 'diagnostic', id: 'child/2', reason: 'unsupported' },
+    ],
+    parentAvailable: true,
+  })
+  assert.deepEqual(calls.at(-2), { endpoint: 'session/projections', args: { request: { sessionId: 'session/a' } } })
+  assert.deepEqual(
+    (await (await post('/v1/sessions/session%2Fa/subagents/child%2F1/interrupt', { mode: 'continuable' })).json()).data,
+    {
+      interrupted: true,
+    },
+  )
+  assert.deepEqual(calls.at(-1), {
+    endpoint: 'subagents/interruptByUser',
+    args: { childSessionId: 'child/1' },
+  })
+  assert.equal((await post('/v1/sessions/session%2Fa/subagents/child%2F1/interrupt', { mode: 'one-shot' })).status, 400)
   console.log('Goal Gateway routes: authentication, validation, live activation, create and CAS forwarding passed.')
 } finally {
   await gateway.stop()

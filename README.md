@@ -138,9 +138,16 @@ Account reads are deliberately read-only: `POST /v1/account/profile` and `POST /
 
 ## Background jobs, schedules and Workspaces
 
+- `POST /v1/sessions/:id/queue` and `POST /v1/sessions/:id/jobs` return `{ items }`
+  for one Session. The `session/control` baseline carries projections only, so
+  these snapshots come from two per-Session streams opened alongside
+  `session/follow`: `session/observeState` feeds the queue, `job/list` feeds the
+  job roster, and each also broadcasts `session/queue` / `session/jobs` frames to
+  subscribed devices. When no stream has cached a value yet, the route performs
+  one direct read (`session/state`, or the opening `job/list` frame) so a polling
+  REST client still sees live data.
 - `POST /v1/sessions/:id/jobs/:jobId/kill` forwards `job/kill`, so a job shown in
-  the activity panel can also be stopped from it. Jobs themselves arrive through
-  the `session/control` baseline stream.
+  the activity panel can also be stopped from it.
 - `POST /v1/schedules/create` forwards `schedule/create` with the Host's own
   `ScheduleCreateRequest` (`title`, `prompt`, `timing` and optional `target`).
   `POST /v1/schedules/:id/run`, `/view` and `/history` forward `schedule/run`,
@@ -152,6 +159,21 @@ Account reads are deliberately read-only: `POST /v1/account/profile` and `POST /
   stream publishes the whole pinned set, which `/v1/sessions/list` now reports
   as `pinnedSessionIds` alongside `workspaces` and `archivedSessionIds`.
 - `POST /v1/workspaces/create` forwards `workspace/create` with a `path`.
+
+## Sub-agents
+
+`POST /v1/sessions/:id/subagents` lists one parent's direct children. No
+`subagents/list` Remote exists in the current Host, so the gateway reads the
+`subagentCatalog` projection through `session/projections` and adds the two facts
+the projection does not carry: `activity` from `session/list` `running`, and
+`hasChildren` from a cached grandchild catalog. A child whose `mode` is neither
+`one-shot` nor `continuable` is reported as
+`{ kind: 'diagnostic', reason: 'unsupported' }` rather than dropped.
+
+`POST /v1/sessions/:parentId/subagents/:childId/interrupt` forwards
+`subagents/interruptByUser` with `{ childSessionId }`. The parent segment is
+decoded for validation only; the Host authorizes the interrupt on the child's own
+Session. `mode` must be `continuable`.
 
 ## Development
 

@@ -152,11 +152,20 @@ type DshModelCatalog = {
   groups?: unknown
   failures?: unknown
 }
+// The Host control stream publishes one baseline and one `projection` frame per
+// committed event. Each frame carries every projection key that event changed;
+// a key absent from `changes` is unchanged rather than removed.
 type DshControlFrame =
-  | { type: 'baseline'; value?: { queues?: Record<string, unknown[]>; jobs?: Record<string, unknown[]> } }
-  | { type: 'queue'; sessionId?: string; items?: unknown[] }
-  | { type: 'jobs'; sessionId?: string; jobs?: unknown[] }
-  | { type: 'projection'; sessionId?: string; key?: string; value?: unknown }
+  | {
+      type: 'baseline'
+      value?: { projections?: Record<string, { asOfSeq?: number; values?: Record<string, unknown> }> }
+    }
+  | {
+      type: 'projection'
+      sessionId?: string
+      seq?: number
+      changes?: readonly { key?: string; val?: unknown }[]
+    }
 type DshWorkspaceBaseline = {
   items?: DshWorkspace[]
   archivedSessionIds?: string[]
@@ -593,14 +602,14 @@ export class MobileGateway {
     if (queueSnapshot !== null) {
       this.#ensureUpstream()
       const sessionId = decodePathSegment(queueSnapshot)
-      writeJson(response, 200, await this.#response({ items: this.#queues.get(sessionId) ?? [] }))
+      writeJson(response, 200, await this.#response({ items: await this.#readQueue(sessionId) }))
       return
     }
     const jobs = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/jobs$/)
     if (jobs !== null) {
       this.#ensureUpstream()
       const sessionId = decodePathSegment(jobs)
-      writeJson(response, 200, await this.#response({ items: this.#jobs.get(sessionId) ?? [] }))
+      writeJson(response, 200, await this.#response({ items: await this.#readJobs(sessionId) }))
       return
     }
     // A job that shows up in the activity panel must also be stoppable from it.
@@ -659,23 +668,29 @@ export class MobileGateway {
     }
     const interruptSubagent = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/subagents\/([^/]+)\/interrupt$/)
     if (interruptSubagent !== null) {
-      const parentSessionId = decodePathSegment(interruptSubagent)
+      // The parent segment stays in the path for the device's benefit only.
+      // The Host authorizes the interrupt on the child's own session, so the
+      // new Remote needs nothing else.
+      decodePathSegment(interruptSubagent)
       const childSessionId = decodePathSegmentAt(interruptSubagent, 2, '子 Agent 路径无效。')
       if (requireSubagentMode(body.mode) !== 'continuable')
         throw new GatewayHttpError('bad-request', '只有可继续的子 Agent 可以停止。')
       writeJson(
         response,
         200,
-        await this.#response(
-          await this.#dsh.call('subagents/interruptByParent', { childSessionId, parentSessionId, mode: 'continuable' }),
-        ),
+        await this.#response(await this.#dsh.call('subagents/interruptByUser', { childSessionId })),
       )
       return
     }
     const subagents = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/subagents$/)
     if (subagents !== null) {
+      // No `subagents/list` Remote exists in rc.1. The direct-child catalog is
+      // the `subagentCatalog` projection the control stream already caches,
+      // so read it through `session/projections` and add the two facts the
+      // projection does not carry.
       const parentSessionId = decodePathSegment(subagents)
-      writeJson(response, 200, await this.#response(await this.#dsh.call('subagents/list', { parentSessionId })))
+      const payload = await this.#readSubagentCatalog(parentSessionId)
+      writeJson(response, 200, await this.#response(payload))
       return
     }
     // Account reads stay read-only on purpose: the gateway has one bearer token
@@ -1187,6 +1202,74 @@ export class MobileGateway {
     return undefined
   }
 
+  /**
+   * Reads one parent's direct-child catalog through `session/projections`.
+   *
+   * The catalog carries only identity; running state comes from the session
+   * list, matching the desktop header that derives activity the same way.
+   * @param parentSessionId - Session whose children are listed.
+   * @returns The mobile catalog payload with `parentAvailable` false when
+   * the parent has no projection block at all.
+   */
+  async #readSubagentCatalog(parentSessionId: string): Promise<{
+    entries: Array<
+      | {
+          kind: 'child'
+          id: string
+          mode: 'one-shot' | 'continuable'
+          activity: 'running' | 'inactive'
+          hasChildren: boolean
+          label?: string
+        }
+      | { kind: 'diagnostic'; id: string; reason: 'corrupt' | 'unsupported' | 'unavailable' }
+    >
+    parentAvailable: boolean
+  }> {
+    const value = await this.#dsh.call<{
+      kind?: string
+      values?: Record<string, unknown>
+    }>('session/projections', { request: { sessionId: parentSessionId } })
+    if (value === null || value === undefined) return { entries: [], parentAvailable: false }
+    const catalog = value.values?.subagentCatalog
+    if (!Array.isArray(catalog)) return { entries: [], parentAvailable: false }
+    const summary = await this.#dsh.call<DshSessionList>('session/list', { _request: {} })
+    const runningById = new Map<string, boolean>()
+    for (const item of summary.items ?? []) runningById.set(item.sessionId, item.running === true)
+    const entries: Array<
+      | {
+          kind: 'child'
+          id: string
+          mode: 'one-shot' | 'continuable'
+          activity: 'running' | 'inactive'
+          hasChildren: boolean
+          label?: string
+        }
+      | { kind: 'diagnostic'; id: string; reason: 'corrupt' | 'unsupported' | 'unavailable' }
+    > = []
+    for (const raw of catalog) {
+      if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) continue
+      const row = raw as Record<string, unknown>
+      const id = typeof row.id === 'string' ? row.id : undefined
+      if (id === undefined) continue
+      const mode = row.mode
+      if (mode !== 'one-shot' && mode !== 'continuable') {
+        entries.push({ kind: 'diagnostic', id, reason: 'unsupported' })
+        continue
+      }
+      const label = typeof row.label === 'string' ? row.label : undefined
+      const childCatalog = this.#projections.get(id)?.subagentCatalog
+      entries.push({
+        kind: 'child',
+        id,
+        mode,
+        activity: runningById.get(id) === true ? 'running' : 'inactive',
+        hasChildren: Array.isArray(childCatalog) && childCatalog.length > 0,
+        ...(label === undefined ? {} : { label }),
+      })
+    }
+    return { entries, parentAvailable: true }
+  }
+
   #startUpstream(): void {
     if (this.#status === undefined) return
     if (this.#eventsAbort === undefined) {
@@ -1477,46 +1560,25 @@ export class MobileGateway {
 
   #handleControlFrame(frame: DshControlFrame): void {
     if (frame.type === 'baseline') {
-      const queues = frame.value?.queues ?? {}
-      const jobs = frame.value?.jobs ?? {}
-      this.#queues.clear()
-      for (const [sessionId, items] of Object.entries(queues)) this.#queues.set(sessionId, items)
-      this.#jobs.clear()
-      for (const [sessionId, sessionJobs] of Object.entries(jobs)) this.#jobs.set(sessionId, sessionJobs)
+      const projections = frame.value?.projections ?? {}
+      this.#projections.clear()
+      for (const [sessionId, block] of Object.entries(projections)) {
+        if (block?.values !== undefined) this.#projections.set(sessionId, block.values)
+      }
       return
     }
-    if (frame.type === 'queue') {
-      const sessionId = frame.sessionId
-      if (sessionId === undefined) return
-      this.#queues.set(sessionId, frame.items ?? [])
-      this.#broadcast({
-        contractVersion: 1,
-        eventId: this.#nextStreamEventId(),
-        type: 'session/queue',
-        payload: { items: frame.items ?? [] },
-        sessionId,
-        snapshot: true,
-      })
-      return
+    if (frame.type !== 'projection' || frame.sessionId === undefined) return
+    const values = this.#projections.get(frame.sessionId) ?? {}
+    const next: Record<string, unknown> = { ...values }
+    let changed = false
+    for (const change of frame.changes ?? []) {
+      if (change.key === undefined) continue
+      next[change.key] = change.val
+      changed = true
     }
-    if (frame.type === 'jobs') {
-      const sessionId = frame.sessionId
-      if (sessionId === undefined) return
-      this.#jobs.set(sessionId, frame.jobs ?? [])
-      this.#broadcast({
-        contractVersion: 1,
-        eventId: this.#nextStreamEventId(),
-        type: 'session/jobs',
-        payload: { jobs: frame.jobs ?? [] },
-        sessionId,
-        snapshot: true,
-      })
-      return
-    }
-    if (typeof frame.sessionId === 'string' && typeof frame.key === 'string') {
-      const values = this.#projections.get(frame.sessionId) ?? {}
-      this.#projections.set(frame.sessionId, { ...values, [frame.key]: frame.value })
-    }
+    // A frame with no readable change must not replace the cached block with an
+    // empty copy, which would drop every value the baseline established.
+    if (changed) this.#projections.set(frame.sessionId, next)
   }
 
   #handleWorkspaceFrame(frame: DshWorkspaceFrame): void {
@@ -1622,6 +1684,86 @@ export class MobileGateway {
     const controller = new AbortController()
     this.#follows.set(sessionId, { controller })
     void this.#captureFollow(sessionId, controller)
+    void this.#captureState(sessionId, controller)
+    void this.#captureJobList(sessionId, controller)
+  }
+
+  /**
+   * Reads the queued items for one session.
+   * @param sessionId - Session whose queue is required.
+   * @returns The live snapshot, or a fresh passive state read when no follow stream has cached one.
+   */
+  async #readQueue(sessionId: string): Promise<unknown[]> {
+    const cached = this.#queues.get(sessionId)
+    if (cached !== undefined) return cached
+    const state = await this.#dsh.call<{ queue?: unknown[] | null }>('session/state', { request: { sessionId } })
+    const items = Array.isArray(state.queue) ? state.queue : []
+    this.#queues.set(sessionId, items)
+    return items
+  }
+
+  /**
+   * Reads the background-job rows one session can see.
+   * @param sessionId - Session whose job roster is required.
+   * @returns The live snapshot, or the opening frame of a one-shot `job/list` stream.
+   */
+  async #readJobs(sessionId: string): Promise<unknown[]> {
+    const cached = this.#jobs.get(sessionId)
+    if (cached !== undefined) return cached
+    const controller = new AbortController()
+    try {
+      for await (const frame of this.#dsh.open('job/list', { request: { sessionId } }, controller.signal)) {
+        const list = frame as { type?: string; jobs?: unknown[] }
+        if (list.type !== 'rows' || !Array.isArray(list.jobs)) continue
+        this.#jobs.set(sessionId, list.jobs)
+        return list.jobs
+      }
+      return []
+    } finally {
+      controller.abort()
+    }
+  }
+
+  /** Streams passive session state to keep the queue snapshot live. */
+  async #captureState(sessionId: string, controller: AbortController): Promise<void> {
+    try {
+      for await (const frame of this.#dsh.open('session/observeState', { request: { sessionId } }, controller.signal)) {
+        const state = frame as { queue?: unknown[] | null }
+        const items = Array.isArray(state.queue) ? (state.queue as unknown[]) : []
+        this.#queues.set(sessionId, items)
+        this.#broadcast({
+          contractVersion: 1,
+          eventId: this.#nextStreamEventId(),
+          type: 'session/queue',
+          payload: { items },
+          sessionId,
+          snapshot: true,
+        })
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) console.error('[mobile-gateway] DSH session state ended:', error)
+    }
+  }
+
+  /** Streams the session's background-job rows to keep the list live. */
+  async #captureJobList(sessionId: string, controller: AbortController): Promise<void> {
+    try {
+      for await (const frame of this.#dsh.open('job/list', { request: { sessionId } }, controller.signal)) {
+        const list = frame as { type?: string; jobs?: unknown[] }
+        if (list.type !== 'rows' || !Array.isArray(list.jobs)) continue
+        this.#jobs.set(sessionId, list.jobs)
+        this.#broadcast({
+          contractVersion: 1,
+          eventId: this.#nextStreamEventId(),
+          type: 'session/jobs',
+          payload: { jobs: list.jobs },
+          sessionId,
+          snapshot: true,
+        })
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) console.error('[mobile-gateway] DSH session jobs ended:', error)
+    }
   }
 
   async #captureFollow(sessionId: string, controller: AbortController): Promise<void> {

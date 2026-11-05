@@ -1,6 +1,6 @@
 {
   "name": "dsh-phone-access",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Reach this DeepSeek Harness desktop from the native mobile client over the public internet, with an address and a password.",
   "private": false,
   "repository": {
