@@ -8,3 +8,6 @@ node_modules/
 # Editor and OS noise
 .DS_Store
 *.log
+
+# Local pack output
+*.tgz
