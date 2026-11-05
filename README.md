@@ -164,10 +164,9 @@ Account reads are deliberately read-only: `POST /v1/account/profile` and `POST /
 
 `POST /v1/sessions/:id/subagents` lists one parent's direct children. No
 `subagents/list` Remote exists in the current Host, so the gateway reads the
-`subagentCatalog` projection through `session/projections` and adds the two facts
-the projection does not carry: `activity` from `session/list` `running`, and
-`hasChildren` from a cached grandchild catalog. A child whose `mode` is neither
-`one-shot` nor `continuable` is reported as
+`subagentCatalog` projection through `session/projections` and adds the one fact
+the projection does not carry: `activity` from `session/list` `running`. A child
+whose `mode` is neither `one-shot` nor `continuable` is reported as
 `{ kind: 'diagnostic', reason: 'unsupported' }` rather than dropped.
 
 `POST /v1/sessions/:parentId/subagents/:childId/interrupt` forwards

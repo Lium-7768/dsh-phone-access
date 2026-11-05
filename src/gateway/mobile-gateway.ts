@@ -132,6 +132,16 @@ type DshSessionSummary = {
   [key: string]: unknown
 }
 type DshSessionList = { items?: DshSessionSummary[] }
+/** One row of the mobile sub-agent roster; diagnostics keep the row visible. */
+type MobileSubagentEntry =
+  | {
+      kind: 'child'
+      id: string
+      mode: 'one-shot' | 'continuable'
+      activity: 'running' | 'inactive'
+      label?: string
+    }
+  | { kind: 'diagnostic'; id: string; reason: 'corrupt' | 'unsupported' | 'unavailable' }
 type DshWorkspace = { workspaceId: string; title?: string; path?: string; sessionIds?: string[] }
 type DshWorkspaceList = { items?: DshWorkspace[]; archivedSessionIds?: string[] }
 type DshHistoryRecord = { type?: 'event'; event?: Record<string, unknown> }
@@ -1211,20 +1221,9 @@ export class MobileGateway {
    * @returns The mobile catalog payload with `parentAvailable` false when
    * the parent has no projection block at all.
    */
-  async #readSubagentCatalog(parentSessionId: string): Promise<{
-    entries: Array<
-      | {
-          kind: 'child'
-          id: string
-          mode: 'one-shot' | 'continuable'
-          activity: 'running' | 'inactive'
-          hasChildren: boolean
-          label?: string
-        }
-      | { kind: 'diagnostic'; id: string; reason: 'corrupt' | 'unsupported' | 'unavailable' }
-    >
-    parentAvailable: boolean
-  }> {
+  async #readSubagentCatalog(
+    parentSessionId: string,
+  ): Promise<{ entries: MobileSubagentEntry[]; parentAvailable: boolean }> {
     const value = await this.#dsh.call<{
       kind?: string
       values?: Record<string, unknown>
@@ -1235,17 +1234,7 @@ export class MobileGateway {
     const summary = await this.#dsh.call<DshSessionList>('session/list', { _request: {} })
     const runningById = new Map<string, boolean>()
     for (const item of summary.items ?? []) runningById.set(item.sessionId, item.running === true)
-    const entries: Array<
-      | {
-          kind: 'child'
-          id: string
-          mode: 'one-shot' | 'continuable'
-          activity: 'running' | 'inactive'
-          hasChildren: boolean
-          label?: string
-        }
-      | { kind: 'diagnostic'; id: string; reason: 'corrupt' | 'unsupported' | 'unavailable' }
-    > = []
+    const entries: MobileSubagentEntry[] = []
     for (const raw of catalog) {
       if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) continue
       const row = raw as Record<string, unknown>
@@ -1257,13 +1246,11 @@ export class MobileGateway {
         continue
       }
       const label = typeof row.label === 'string' ? row.label : undefined
-      const childCatalog = this.#projections.get(id)?.subagentCatalog
       entries.push({
         kind: 'child',
         id,
         mode,
         activity: runningById.get(id) === true ? 'running' : 'inactive',
-        hasChildren: Array.isArray(childCatalog) && childCatalog.length > 0,
         ...(label === undefined ? {} : { label }),
       })
     }

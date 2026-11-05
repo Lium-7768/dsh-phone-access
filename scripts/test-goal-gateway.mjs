@@ -300,7 +300,6 @@ try {
         id: 'child/1',
         mode: 'continuable',
         activity: 'inactive',
-        hasChildren: false,
         label: 'Reviewer',
       },
       { kind: 'diagnostic', id: 'child/2', reason: 'unsupported' },
