@@ -732,6 +732,20 @@ export class MobileGateway {
       )
       return
     }
+    // The `/` menu shows the desktop's user-invocable skills beside its
+    // commands; both insert the same `/name ` text and the Host decides which
+    // one a prompt line means.
+    const skills = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/skills$/)
+    if (skills !== null) {
+      writeJson(
+        response,
+        200,
+        await this.#response(
+          await this.#dsh.call('skills/list', { request: { sessionId: decodePathSegment(skills) } }),
+        ),
+      )
+      return
+    }
     // The `@` trigger menu needs both discovery sources the desktop combines:
     // workspace paths from the file-reference provider and other Sessions from
     // the session-reference resolver. Neither failure may empty the other list,
