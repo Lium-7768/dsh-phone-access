@@ -108,3 +108,31 @@ export interface MobileAgentPresetEntry {
   description?: string
   broken?: string
 }
+
+/** One workspace path the `@` menu can complete, as the file-reference provider reports it. */
+export interface MobileReferenceFileCandidate {
+  /** User-facing path accepted by prompts and filesystem tools. */
+  path: string
+  /** Directories keep completion open; files finish the mention. */
+  kind: 'file' | 'directory'
+}
+
+/** One Session the `@` menu can reference, as the session-reference resolver reports it. */
+export interface MobileReferenceSessionCandidate {
+  sessionId: string
+  /** Latest log-backed title, falling back to the opaque session id. */
+  label: string
+  /** Display and canonical-mention text, preferring a subagent's creation label. */
+  displayTitle?: string
+  /** Canonical `@[label](dsh-session:…)` mention serialized into the draft. */
+  mention: string
+  /** Whether the source Session shares the requesting Session's workspace. */
+  sameWorkspace: boolean
+  createdAt: number
+}
+
+/** Both `@` menus' candidate lists for one query. */
+export interface MobileReferencePayload {
+  files: MobileReferenceFileCandidate[]
+  sessions: MobileReferenceSessionCandidate[]
+}

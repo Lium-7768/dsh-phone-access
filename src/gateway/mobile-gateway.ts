@@ -2,7 +2,14 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { DshLoopbackClient, DshLoopbackError } from './dsh-loopback-client.ts'
 import { MobileDeviceRegistry } from './device-registry.ts'
-import type { MobileDevice, MobileDeviceCredential, MobileGatewayError, MobileResponse } from './types.ts'
+import type {
+  MobileDevice,
+  MobileDeviceCredential,
+  MobileGatewayError,
+  MobileReferenceFileCandidate,
+  MobileReferenceSessionCandidate,
+  MobileResponse,
+} from './types.ts'
 
 /** Configuration for one loopback-only Mobile Gateway instance. */
 export interface MobileGatewayOptions {
@@ -723,6 +730,33 @@ export class MobileGateway {
           items: await this.#dsh.call('commands/list', { agentId: decodePathSegment(commands) }),
         }),
       )
+      return
+    }
+    // The `@` trigger menu needs both discovery sources the desktop combines:
+    // workspace paths from the file-reference provider and other Sessions from
+    // the session-reference resolver. Neither failure may empty the other list,
+    // so each lookup degrades on its own.
+    const references = url.pathname.match(/^\/v1\/sessions\/([^/]+)\/references$/)
+    if (references !== null) {
+      const agentId = decodePathSegment(references)
+      const query = typeof body.query === 'string' ? body.query : ''
+      const [files, sessions] = await Promise.all([
+        this.#dsh
+          .call<MobileReferenceFileCandidate[]>('fileReferences/list', { agentId, query })
+          .catch((cause: unknown) => {
+            // An unavailable file provider costs the workspace rows only.
+            if (cause instanceof DshLoopbackError) return []
+            throw cause
+          }),
+        this.#dsh
+          .call<MobileReferenceSessionCandidate[]>('sessionReferenceResolver/candidates', { agentId, query })
+          .catch((cause: unknown) => {
+            // An unavailable session resolver costs the Session rows only.
+            if (cause instanceof DshLoopbackError) return []
+            throw cause
+          }),
+      ])
+      writeJson(response, 200, await this.#response({ files, sessions }))
       return
     }
     if (url.pathname === '/v1/schedules/catalog') {
