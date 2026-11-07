@@ -1034,6 +1034,9 @@ export class MobileGateway {
     if (prompt !== null) {
       const content = readPromptContent(body)
       const clientTimeZone = optionalText(body.clientTimeZone)
+      // `queue` waits for the running Turn; `steer` interrupts it. The phone chooses the
+      // same behavior its composer setting names, and the desktop's own default is queue.
+      const mode = body.mode === 'steer' ? 'steer' : 'queue'
       writeJson(
         response,
         200,
@@ -1042,7 +1045,7 @@ export class MobileGateway {
             request: {
               requestId: randomUUID(),
               sessionId: decodePathSegment(prompt),
-              mode: 'queue',
+              mode,
               content,
               ...(clientTimeZone === undefined ? {} : { clientTimeZone }),
             },
