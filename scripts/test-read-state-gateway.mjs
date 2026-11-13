@@ -160,6 +160,59 @@ try {
   })
 } finally {
   await gateway.stop().catch(() => undefined)
+}
+
+// A desktop that predates the reading service answers the subscription with a rejection.
+// The gateway must report it once and stop, rather than retrying a stream that can never
+// open and recording a credential per attempt.
+let opens = 0
+const legacy = new MobileGateway({
+  wireClient: {
+    async call(endpoint) {
+      if (endpoint === 'session/list') return { items: [{ sessionId: 'session%2Fa' }] }
+      throw new Error(`Unexpected endpoint: ${endpoint}`)
+    },
+    open(endpoint, _args, signal) {
+      // Only the reading stream is rejected; the rest of the Host is healthy, which is
+      // exactly the rc.2 shape this test stands in for.
+      if (endpoint === 'sessionStatus/follow') {
+        opens += 1
+        const error = new Error('Unknown method sessionStatus/follow')
+        Object.assign(error, { code: 'upstream-rejected', upstreamCode: 'unknown-method' })
+        throw error
+      }
+      return (async function* () {
+        await idle(signal)
+      })()
+    },
+    openEvents(signal) {
+      return (async function* () {
+        await idle(signal)
+      })()
+    },
+  },
+})
+const legacyCredential = legacy.pairDevice('Legacy host test')
+const legacyUrl = (await legacy.start()).url
+try {
+  await new Promise(resolve => setTimeout(resolve, 200))
+  await check('a Host without reading records is asked once, not on a backoff', async () => {
+    assert.equal(opens, 1)
+    // The list still answers; it simply carries no unread flag.
+    const body = await (
+      await fetch(`${legacyUrl}/v1/sessions/list`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${legacyCredential.deviceId}.${legacyCredential.accessToken}`,
+        },
+        body: '{}',
+      })
+    ).json()
+    assert.equal(body.data.items[0].completionUnread, undefined)
+  })
+} finally {
+  await legacy.stop().catch(() => undefined)
   await rm(temporary, { recursive: true, force: true })
 }
 

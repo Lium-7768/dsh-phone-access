@@ -286,6 +286,8 @@ export class MobileGateway {
   #workspaceRetry: ReturnType<typeof setTimeout> | undefined
   #readStateAbort: AbortController | undefined
   #readStateRetry: ReturnType<typeof setTimeout> | undefined
+  /** The Host rejected the reading-record subscription; this desktop has no such service. */
+  #readStateUnsupported = false
   /**
    * Host reading records, keyed by Session: whether the desktop has acknowledged the
    * latest completed turn. The Host owns this state; the gateway only mirrors it so a
@@ -1378,7 +1380,7 @@ export class MobileGateway {
       this.#workspaceAbort = controller
       void this.#captureWorkspaces(controller)
     }
-    if (this.#readStateAbort === undefined) {
+    if (this.#readStateAbort === undefined && !this.#readStateUnsupported) {
       const controller = new AbortController()
       this.#readStateAbort = controller
       void this.#captureReadState(controller)
@@ -1478,12 +1480,25 @@ export class MobileGateway {
         this.#handleReadStateFrame(frame as ReadStateFrame)
       }
     } catch (error) {
-      if (!controller.signal.aborted)
-        console.error('[mobile-gateway] DSH sessionStatus subscription ended:', error)
+      if (controller.signal.aborted) return
+      // A Host without the reading service is a supported combination: a desktop that
+      // predates rc.3 answers the subscription with an unknown-method rejection. Retrying
+      // that on a backoff forever would fill the log with the same line and keep minting
+      // credentials for a stream that can never open, so it is reported once and left off.
+      if (error instanceof DshLoopbackError && error.upstreamCode !== undefined) {
+        this.#readStateUnsupported = true
+        console.warn(
+          '[mobile-gateway] this desktop has no reading records; unread marks stay local:',
+          error.message,
+        )
+        return
+      }
+      console.error('[mobile-gateway] DSH sessionStatus subscription ended:', error)
     } finally {
       if (this.#readStateAbort === controller) {
         this.#readStateAbort = undefined
-        this.#scheduleUpstreamRestart('read-state', controller.signal.aborted)
+        if (!this.#readStateUnsupported)
+          this.#scheduleUpstreamRestart('read-state', controller.signal.aborted)
       }
     }
   }
