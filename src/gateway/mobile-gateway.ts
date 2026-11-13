@@ -236,7 +236,35 @@ type SessionAddress =
   | { kind: 'session'; sessionId: string }
   | { kind: 'subagent'; parentSessionId: string; childSessionId: string; mode: 'one-shot' | 'continuable' }
 
-type UpstreamStream = 'events' | 'control' | 'workspace'
+type UpstreamStream = 'events' | 'control' | 'read-state' | 'workspace'
+
+/** One Host reading record, before the gateway derives the unread flag. */
+interface HostReadState {
+  readonly sessionId: string
+  readonly completedTurn: number
+  readonly failed: boolean
+  readonly readTurn: number
+  readonly manualUnread: boolean
+}
+
+/** A baseline of every record, or one that changed. */
+type ReadStateFrame =
+  | { readonly type: 'baseline'; readonly items: readonly HostReadState[] }
+  | { readonly type: 'changed'; readonly state: HostReadState }
+
+/**
+ * What the phone needs to know about one Session's reading state.
+ *
+ * The Host reports the turns; whether that leaves the Session unread is the same
+ * derivation its own clients make, so both clients agree without the phone counting.
+ *
+ * @param state - The Host record for one Session.
+ * @returns The unread flag and whether the unacknowledged turn failed.
+ */
+function viewOf(state: HostReadState): { completionFailed?: boolean; completionUnread: boolean } {
+  const unread = state.manualUnread || state.readTurn < state.completedTurn
+  return unread ? { completionUnread: true, completionFailed: state.failed } : { completionUnread: false }
+}
 
 const MOBILE_WRITABLE_SETTINGS = new Set(['ui-theme', 'locale', 'ui-conversation', 'agent-presets', 'permission'])
 
@@ -251,11 +279,21 @@ export class MobileGateway {
   #eventsAbort: AbortController | undefined
   #eventsRetry: ReturnType<typeof setTimeout> | undefined
   /** Consecutive failed opens per upstream, driving the retry backoff. */
-  #streamFailures: Record<UpstreamStream, number> = { events: 0, control: 0, workspace: 0 }
+  #streamFailures: Record<UpstreamStream, number> = { events: 0, control: 0, 'read-state': 0, workspace: 0 }
   #controlAbort: AbortController | undefined
   #controlRetry: ReturnType<typeof setTimeout> | undefined
   #workspaceAbort: AbortController | undefined
   #workspaceRetry: ReturnType<typeof setTimeout> | undefined
+  #readStateAbort: AbortController | undefined
+  #readStateRetry: ReturnType<typeof setTimeout> | undefined
+  /**
+   * Host reading records, keyed by Session: whether the desktop has acknowledged the
+   * latest completed turn. The Host owns this state; the gateway only mirrors it so a
+   * phone shows the same unread marks the desktop does instead of counting its own.
+   */
+  readonly #readState = new Map<string, { completionFailed?: boolean; completionUnread: boolean }>()
+  /** The turn each Session last completed, which an acknowledgement is measured against. */
+  readonly #readCompletedTurn = new Map<string, number>()
   readonly #follows = new Map<string, { controller: AbortController }>()
   #clientId: string | undefined
   #nextEventId = 0
@@ -503,14 +541,29 @@ export class MobileGateway {
         200,
         await this.#response({
           ...summary,
-          items: (summary.items ?? []).map(item =>
-            withVisibleSessionMetadata(item, this.#projections.get(item.sessionId)),
-          ),
+          items: (summary.items ?? []).map(item => {
+            const read = this.#readState.get(item.sessionId)
+            return {
+              ...withVisibleSessionMetadata(item, this.#projections.get(item.sessionId)),
+              // The Host owns whether this Session's latest turn was acknowledged, so a
+              // phone shows the same mark the desktop does instead of counting its own.
+              ...(read === undefined ? {} : read),
+            }
+          }),
           workspaces: mobileWorkspaces(sessionList.items),
           archivedSessionIds: sessionList.archivedSessionIds ?? [],
           pinnedSessionIds: this.#pinnedSessionIds,
         }),
       )
+      return
+    }
+    if (url.pathname === '/v1/sessions/read-state') {
+      // The phone acknowledging a conversation it opened writes the Host's own record, so
+      // the desktop clears the same mark rather than keeping a second opinion.
+      const sessionId = requireText(body.sessionId, '缺少会话标识。')
+      const read = body.read !== false
+      await this.#markRead(sessionId, read)
+      writeJson(response, 200, await this.#response({ sessionId, completionUnread: !read }))
       return
     }
     if (url.pathname === '/v1/sessions/create') {
@@ -1325,6 +1378,11 @@ export class MobileGateway {
       this.#workspaceAbort = controller
       void this.#captureWorkspaces(controller)
     }
+    if (this.#readStateAbort === undefined) {
+      const controller = new AbortController()
+      this.#readStateAbort = controller
+      void this.#captureReadState(controller)
+    }
   }
 
   /** Re-arms any upstream stream that is not currently capturing. */
@@ -1345,6 +1403,10 @@ export class MobileGateway {
     this.#workspaceAbort = undefined
     if (this.#workspaceRetry !== undefined) clearTimeout(this.#workspaceRetry)
     this.#workspaceRetry = undefined
+    this.#readStateAbort?.abort()
+    this.#readStateAbort = undefined
+    if (this.#readStateRetry !== undefined) clearTimeout(this.#readStateRetry)
+    this.#readStateRetry = undefined
     for (const follow of this.#follows.values()) follow.controller.abort()
     this.#follows.clear()
     this.#clientId = undefined
@@ -1399,11 +1461,87 @@ export class MobileGateway {
     }
   }
 
+  /**
+   * Mirrors the Host's reading records for the duration of this gateway.
+   *
+   * The Host owns whether a Session's latest completed turn has been acknowledged; the
+   * phone must show that record rather than count completions of its own, or the same
+   * conversation reads differently on the two clients. `follow` opens with a baseline, so
+   * a reconnect restates the whole table instead of leaving stale marks behind.
+   *
+   * @param controller - Cancels the subscription when the gateway stops.
+   */
+  async #captureReadState(controller: AbortController): Promise<void> {
+    try {
+      for await (const frame of this.#dsh.open('sessionStatus/follow', {}, controller.signal)) {
+        this.#streamFailures['read-state'] = 0
+        this.#handleReadStateFrame(frame as ReadStateFrame)
+      }
+    } catch (error) {
+      if (!controller.signal.aborted)
+        console.error('[mobile-gateway] DSH sessionStatus subscription ended:', error)
+    } finally {
+      if (this.#readStateAbort === controller) {
+        this.#readStateAbort = undefined
+        this.#scheduleUpstreamRestart('read-state', controller.signal.aborted)
+      }
+    }
+  }
+
+  /**
+   * Applies one reading-record frame, replacing the table on a baseline.
+   *
+   * @param frame - Baseline of every record, or one record that changed.
+   */
+  #handleReadStateFrame(frame: ReadStateFrame): void {
+    if (frame.type === 'baseline') {
+      this.#readState.clear()
+      for (const state of frame.items) {
+        this.#readState.set(state.sessionId, viewOf(state))
+        this.#readCompletedTurn.set(state.sessionId, state.completedTurn)
+      }
+      this.#broadcastReadState()
+      return
+    }
+    this.#readState.set(frame.state.sessionId, viewOf(frame.state))
+    this.#readCompletedTurn.set(frame.state.sessionId, frame.state.completedTurn)
+    this.#broadcastReadState()
+  }
+
+  /** Tells every connected device that the unread marks changed. */
+  /**
+   * Writes one Session's reading record on the Host.
+   *
+   * Acknowledging is a read *through* the turn the Host recorded as completed; marking
+   * unread is the explicit manual reminder. Sending the wrong action would either leave
+   * the mark stuck or clear a reminder the reader set on purpose.
+   *
+   * @param sessionId - Session to mark.
+   * @param read - True to acknowledge everything completed, false to mark unread.
+   */
+  async #markRead(sessionId: string, read: boolean): Promise<void> {
+    const completedTurn = this.#readCompletedTurn.get(sessionId) ?? 0
+    // The Host publishes the result on its follow stream, which updates `#readState` and
+    // broadcasts; nothing is written locally, so a rejected mark leaves the old value.
+    await this.#dsh.call(
+      'sessionStatus/mark',
+      read ? { sessionId, action: { type: 'acknowledge', throughTurn: completedTurn } } : { sessionId, action: { type: 'unread' } },
+    )
+  }
+
+  #broadcastReadState(): void {
+    this.#broadcast({
+      contractVersion: 1,
+      eventId: this.#nextStreamEventId(),
+      type: 'host/read-state-changed',
+      payload: { items: [...this.#readState.entries()].map(([sessionId, state]) => ({ sessionId, ...state })) },
+    })
+  }
+
   #scheduleUpstreamRestart(stream: UpstreamStream, aborted: boolean): void {
     if (aborted || this.#status === undefined) return
-    const existing =
-      stream === 'events' ? this.#eventsRetry : stream === 'control' ? this.#controlRetry : this.#workspaceRetry
-    if (existing !== undefined) return
+    const slot = this.#retrySlots(stream)
+    if (slot.get() !== undefined) return
     // A fixed one-second retry re-minted a credential per attempt, and every
     // credential is a host peer that outlives the attempt. Backing off keeps a
     // failing stream from filling the host's peer table.
@@ -1411,15 +1549,44 @@ export class MobileGateway {
     this.#streamFailures[stream] = attempt
     const delay = Math.min(1_000 * 2 ** (attempt - 1), 30_000)
     const retry = setTimeout(() => {
-      if (stream === 'events') this.#eventsRetry = undefined
-      else if (stream === 'control') this.#controlRetry = undefined
-      else this.#workspaceRetry = undefined
+      slot.set(undefined)
       this.#startUpstream()
     }, delay)
     retry.unref()
-    if (stream === 'events') this.#eventsRetry = retry
-    else if (stream === 'control') this.#controlRetry = retry
-    else this.#workspaceRetry = retry
+    slot.set(retry)
+  }
+
+  /**
+   * The retry handle for one upstream stream.
+   *
+   * Named per stream rather than selected inline: the three-way conditional it replaced
+   * silently treated every unknown stream as `workspace`, which is how a fourth stream
+   * would have cleared another stream's retry.
+   *
+   * @param stream - Which upstream to address.
+   * @returns Accessors for that stream's pending retry timer.
+   */
+  #retrySlots(stream: UpstreamStream): {
+    get(): ReturnType<typeof setTimeout> | undefined
+    set(value: ReturnType<typeof setTimeout> | undefined): void
+  } {
+    const read = (): ReturnType<typeof setTimeout> | undefined =>
+      stream === 'events'
+        ? this.#eventsRetry
+        : stream === 'control'
+          ? this.#controlRetry
+          : stream === 'read-state'
+            ? this.#readStateRetry
+            : this.#workspaceRetry
+    return {
+      get: read,
+      set: (value) => {
+        if (stream === 'events') this.#eventsRetry = value
+        else if (stream === 'control') this.#controlRetry = value
+        else if (stream === 'read-state') this.#readStateRetry = value
+        else this.#workspaceRetry = value
+      },
+    }
   }
 
   #handleEventFrame(value: Record<string, unknown>): void {
