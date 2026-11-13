@@ -58,7 +58,8 @@
     "prepack": "npm run verify",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.ts\" \"client/*.js\" \"scripts/*.mjs\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"client/*.js\" \"scripts/*.mjs\""
+    "format:check": "prettier --check \"src/**/*.ts\" \"client/*.js\" \"scripts/*.mjs\"",
+    "test:read-state": "node scripts/test-read-state-gateway.mjs"
   },
   "author": "Yu Mei <yumei@aaxis.io>",
   "license": "MIT",
