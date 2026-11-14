@@ -24,25 +24,23 @@ declare module '@deepseek-ai/cordis' {
       register(route: {
         kind: 'prefix'
         path: string
+        /** Admission the host applies before the handler runs, from rc.3 on. */
+        auth?: 'anonymous' | 'required' | 'deny'
         handler(req: IncomingMessage, res: ServerResponse): Promise<void> | void
       }): () => void
     }
-    /** Peer admission the host applies to its own `/api` route. */
+    /** The host's connection service. Route admission lives on the route itself. */
     readonly connection: {
-      /**
-       * Decide whether this peer may reach an authenticated surface.
-       *
-       * @param req - The request being admitted.
-       * @returns The HTTP status to reject with, or undefined to admit it.
-       */
-      requestRejection(req: IncomingMessage): number | undefined
-      /**
-       * Mint a URL carrying the host's launch token.
-       *
-       * @param baseUrl - The host origin, without a path.
-       * @returns The URL the bridge exchanges for a loopback cookie.
-       */
-      authenticatedUrl(baseUrl: string): string
+      /** Launch-token exchange, split out of this service in rc.3. */
+      readonly authentication: {
+        /**
+         * Mint a URL carrying the host's launch token.
+         *
+         * @param baseUrl - The host origin, without a path.
+         * @returns The URL the bridge exchanges for a loopback cookie.
+         */
+        authenticatedUrl(baseUrl: string): string
+      }
     }
     /**
      * Run `callback` once every named service resolves, and re-run it when they

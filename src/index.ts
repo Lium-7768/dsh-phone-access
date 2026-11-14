@@ -24,6 +24,11 @@ import { MobileGateway } from './gateway/mobile-gateway.ts'
 
 import { startFront, type FrontHandle } from './front.ts'
 import { exchangeLaunchToken } from './launch-token.ts'
+import {
+  authenticatedUrl as authenticatedHostUrl,
+  currentLaunchToken,
+  listenForLaunchToken,
+} from './launch-token-source.ts'
 import { PasswordStore } from './password.ts'
 import { PersistentDeviceRegistry } from './persistent-registry.ts'
 import { BRIDGE_RPC_CHANNEL, handleSettingsRpc, type Result } from './settings-rpc.ts'
@@ -35,6 +40,9 @@ const MAX_BRIDGE_BODY_BYTES = 1024 * 1024
 
 /** Cordis plugin name used by loader diagnostics. */
 export const name = 'dsh-phone-access'
+
+/** Longest a boot waits for the host's entry-URL announcement, which lands after startup settles. */
+const LAUNCH_TOKEN_WAIT_MS = 30_000
 
 /** Configuration accepted from `cordis.patch.yml`. */
 export interface Config {
@@ -167,10 +175,14 @@ export function apply(ctx: Context, raw: Config = {}): void {
   // token. `authenticatedUrl` is the supported way to obtain that token.
   ctx.inject(['connection', 'webServer'], hostCtx => {
     const origin = hostCtx.webServer.getOrigin()
+    // rc.3 moved the token exchange into the authentication plugin's private closure. The
+    // plugin still announces its own URL with the token in it, so the token is captured
+    // from that announcement instead of asked for.
+    listenForLaunchToken(hostCtx)
 
     // Boot first: the RPC surface below only serves what boot publishes, and an
     // error there must not stop the bridge from starting.
-    void boot(origin, hostCtx.connection).catch((error: unknown) => {
+    void boot(origin).catch((error: unknown) => {
       warn(error instanceof Error ? error.message : String(error))
     })
 
@@ -184,13 +196,10 @@ export function apply(ctx: Context, raw: Config = {}): void {
         hostCtx.webServer.register({
           kind: 'prefix',
           path: BRIDGE_RPC_CHANNEL,
+          // The webserver admits the request before the handler runs from rc.3 on; the
+          // hand-written `requestRejection` call this replaced no longer exists.
+          auth: 'required',
           handler: async (req, res) => {
-            const rejection = hostCtx.connection.requestRejection(req)
-            if (rejection !== undefined) {
-              res.writeHead(rejection, { 'content-type': 'text/plain' })
-              res.end(rejection === 401 ? 'unauthorized' : 'forbidden')
-              return
-            }
             const request = await readBridgeRequest(req)
             if (request === undefined) {
               writeBridgeResponse(res, 'invalid-request', {
@@ -257,17 +266,46 @@ export function apply(ctx: Context, raw: Config = {}): void {
      * @param hostOrigin - Loopback origin of the running host.
      * @param connection - Host connection service, which mints the launch token.
      */
-    async function boot(hostOrigin: string, connection: { authenticatedUrl(baseUrl: string): string }): Promise<void> {
+    /**
+     * Exchange the launch token for the cookie `/api` accepts.
+     *
+     * The host announces its entry URLs once per process, and that announcement may land
+     * after this plugin boots, so the exchange waits briefly for the token rather than
+     * failing a start that would have worked a moment later.
+     *
+     * @param hostOrigin - Loopback origin of the running host.
+     * @returns The cookie header value, or undefined when the host set none.
+     */
+    async function obtainCookie(hostOrigin: string): Promise<string | undefined> {
+      // The host announces once, shortly after its web application settles, and its
+      // providers fill the announcement list a turn later. Wait for the captured token
+      // rather than for the event, so a slow settle is not mistaken for a missing token.
+      const deadline = Date.now() + LAUNCH_TOKEN_WAIT_MS
+      while (currentLaunchToken() === undefined && Date.now() < deadline)
+        await new Promise(resolve => setTimeout(resolve, 50))
+      if (currentLaunchToken() === undefined) {
+        warn('the host has not announced its launch token; /api calls will be rejected')
+        return undefined
+      }
+      try {
+        return await exchangeLaunchToken(authenticatedHostUrl(hostOrigin))
+      } catch (error) {
+        warn(`cookie exchange failed: ${error instanceof Error ? error.message : String(error)}`)
+        return undefined
+      }
+    }
+
+    async function boot(hostOrigin: string): Promise<void> {
       mkdirSync(cfg.dataDir, { recursive: true })
       const password = new PasswordStore(join(cfg.dataDir, 'password'))
       const devices = new PersistentDeviceRegistry(join(cfg.dataDir, 'devices.json'))
-      const cookie = await exchangeLaunchToken(connection.authenticatedUrl(hostOrigin))
+      const cookie = await obtainCookie(hostOrigin)
       if (cookie === undefined) warn('could not obtain a loopback cookie; /api calls will be rejected')
       // Each stream gets its own peer: a peer owns one socket, and the host drops
       // it when that socket ends, so a shared credential would 401 the rest.
       const mintCookie = async (): Promise<string | undefined> => {
         try {
-          return await exchangeLaunchToken(connection.authenticatedUrl(hostOrigin))
+          return await obtainCookie(hostOrigin)
         } catch {
           return undefined
         }

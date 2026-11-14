@@ -1487,18 +1487,14 @@ export class MobileGateway {
       // credentials for a stream that can never open, so it is reported once and left off.
       if (error instanceof DshLoopbackError && error.upstreamCode !== undefined) {
         this.#readStateUnsupported = true
-        console.warn(
-          '[mobile-gateway] this desktop has no reading records; unread marks stay local:',
-          error.message,
-        )
+        console.warn('[mobile-gateway] this desktop has no reading records; unread marks stay local:', error.message)
         return
       }
       console.error('[mobile-gateway] DSH sessionStatus subscription ended:', error)
     } finally {
       if (this.#readStateAbort === controller) {
         this.#readStateAbort = undefined
-        if (!this.#readStateUnsupported)
-          this.#scheduleUpstreamRestart('read-state', controller.signal.aborted)
+        if (!this.#readStateUnsupported) this.#scheduleUpstreamRestart('read-state', controller.signal.aborted)
       }
     }
   }
@@ -1540,7 +1536,9 @@ export class MobileGateway {
     // broadcasts; nothing is written locally, so a rejected mark leaves the old value.
     await this.#dsh.call(
       'sessionStatus/mark',
-      read ? { sessionId, action: { type: 'acknowledge', throughTurn: completedTurn } } : { sessionId, action: { type: 'unread' } },
+      read
+        ? { sessionId, action: { type: 'acknowledge', throughTurn: completedTurn } }
+        : { sessionId, action: { type: 'unread' } },
     )
   }
 
@@ -1595,7 +1593,7 @@ export class MobileGateway {
             : this.#workspaceRetry
     return {
       get: read,
-      set: (value) => {
+      set: value => {
         if (stream === 'events') this.#eventsRetry = value
         else if (stream === 'control') this.#controlRetry = value
         else if (stream === 'read-state') this.#readStateRetry = value
