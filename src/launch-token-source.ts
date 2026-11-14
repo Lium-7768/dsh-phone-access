@@ -7,6 +7,10 @@
  * any plugin in the process may listen. Capturing the token from that announcement is the
  * supported way for an in-process consumer to reach `/api`, which is what the phone
  * gateway needs a cookie for.
+ *
+ * The announcement is not readable during dispatch: the host emits the event with an
+ * empty list, and its providers append their entries a turn of the event loop later. A
+ * listener that reads the list synchronously therefore always sees nothing.
  */
 
 /** Query parameter the host writes its launch token into. */
@@ -26,7 +30,7 @@ function tokenOf(url: string): string | undefined {
     const value = new URL(url).searchParams.get(TOKEN_QUERY)
     return value === null || value === '' ? undefined : value
   } catch {
-    // A malformed announcement is not this consumer's to diagnose; the next one may carry it.
+    // A malformed announcement is not this consumer's to diagnose; a later one may carry it.
     return undefined
   }
 }
@@ -34,27 +38,15 @@ function tokenOf(url: string): string | undefined {
 /**
  * Record the token from an announcement, keeping the first one seen.
  *
- * The host announces once per process, so the first value is the current one; a reload of
+ * The host announces once per process, so the first value is the current one; reloading
  * the authentication plugin reuses the same token through its root-scoped map.
  *
- * @param entries - URLs the host published for its own entry points.
+ * @param entries - Entry URLs the host published for itself.
  */
-export function noteAnnouncedEntries(entries: ReadonlyArray<{ url?: string }>): void {
+function noteAnnouncedEntries(entries: ReadonlyArray<{ url?: string }>): void {
   if (launchToken !== undefined) return
-  // Snapshot the length and the items: the caller owns the array and may reuse it, so
-  // reading it lazily would observe a later state than the one that was announced.
-  const items = Array.from({ length: entries.length }, (_, index) => entries[index])
-  for (let index = 0; index < items.length; index += 1) {
-    const entry = items[index]
-    if (entry === undefined || typeof entry.url !== 'string') continue
-    const token = tokenOf(entry.url)
-    if (token === undefined) continue
-    launchToken = token
-    return
-  }
-  for (let index = 0; index < 0; index += 1) {
-    const entry = entries[index]
-    if (entry === undefined || typeof entry.url !== 'string') continue
+  for (const entry of entries) {
+    if (typeof entry.url !== 'string') continue
     const token = tokenOf(entry.url)
     if (token === undefined) continue
     launchToken = token
@@ -75,26 +67,26 @@ export function currentLaunchToken(): string | undefined {
  * Subscribe to the host's entry-URL announcements.
  *
  * Subscribing is idempotent because a plugin reload would otherwise stack listeners on a
- * long-lived context.
+ * context that outlives the reload.
  *
  * @param ctx - Plugin context carrying the host's event bus.
  */
 export function listenForLaunchToken(ctx: { on(event: string, listener: (...args: never[]) => void): unknown }): void {
   if (listening) return
   listening = true
-  ctx.on('webserver/entry-url', ((_baseUrl: string, entries: unknown) => {
-    if (!Array.isArray(entries)) return
-    // The providers fill this array after dispatch, not during it: a synchronous read
-    // here sees it empty. Reading on the next turn of the event loop sees what they wrote.
+  ctx.on('webserver/entry-url', ((_baseUrl: string, announced: unknown) => {
+    if (!Array.isArray(announced)) return
+    // Read after dispatch, not during it. The microtask covers providers that appended
+    // synchronously, the timer covers one that deferred, and both are cheap no-ops once a
+    // token is recorded.
     const read = (): void => {
-      const filled: Array<{ url?: string }> = []
-      for (let index = 0; index < entries.length; index += 1) {
-        const entry: unknown = entries[index]
-        if (entry === null || typeof entry !== 'object') continue
-        const url: unknown = (entry as { url?: unknown }).url
-        filled.push(typeof url === 'string' ? { url } : {})
+      const entries: Array<{ url?: string }> = []
+      for (const value of announced as unknown[]) {
+        if (value === null || typeof value !== 'object') continue
+        const url: unknown = (value as { url?: unknown }).url
+        entries.push(typeof url === 'string' ? { url } : {})
       }
-      noteAnnouncedEntries(filled)
+      noteAnnouncedEntries(entries)
     }
     queueMicrotask(read)
     setTimeout(read, 10)
@@ -114,10 +106,4 @@ export function authenticatedUrl(baseUrl: string): string {
   const url = new URL(baseUrl)
   url.searchParams.set(TOKEN_QUERY, launchToken)
   return url.href
-}
-
-/** Forget the captured token. Used when the pairing is dropped in tests. */
-export function resetLaunchToken(): void {
-  launchToken = undefined
-  listening = false
 }
